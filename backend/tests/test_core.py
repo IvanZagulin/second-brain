@@ -15,6 +15,7 @@ from app.services.finance.categorize import hint_category, normalize_merchant
 from app.services.finance.engine import _advance, next_income_date
 from app.services.finance.parsers import parse_notification
 from app.services.finance.receipts import parse_fiscal_qr
+from app.services.fitness_catalog import DEFAULT_EXERCISES
 from app.services.finance.statements import _fingerprints, parse_1c, parse_csv, parse_payment_receipt, \
     parse_sber_certificate
 from app.services.llm.budget import choose_model, usage_cost
@@ -205,3 +206,12 @@ def test_persona():
     prompt = build_system_prompt(None, ["Не называть меня по фамилии"], "Иван")
     assert "Владельца зовут Иван" in prompt and "Не называть меня по фамилии" in prompt and "112" in prompt
     assert crisis_signal("я больше не хочу жить") and not crisis_signal("хочу жить у моря")
+
+
+def test_exercise_catalog():
+    names = [n.lower() for n, *_ in DEFAULT_EXERCISES]
+    assert len(names) == len(set(names))
+    groups = {"back", "biceps", "shoulders", "chest", "triceps", "legs", "core", "cardio", "other"}
+    for _, group, _, secondary in DEFAULT_EXERCISES:
+        assert group in groups and set(secondary) <= groups
+    assert {g for _, g, _, _ in DEFAULT_EXERCISES} >= {"back", "biceps", "shoulders", "chest", "triceps", "legs"}

@@ -25,6 +25,7 @@ from app.models import (
     Account, AgentProfile, Debt, Exercise, FinancialGoal, PairingCode, Subscription, User, WorkoutPlan,
 )
 from app.services.finance.categorize import ensure_default_categories
+from app.services.fitness_catalog import ensure_default_exercises
 from app.services.settings import set_setting
 
 
@@ -41,11 +42,12 @@ async def cmd_init() -> None:
     async with session_scope() as db:
         user = await get_owner(db)
         await ensure_default_categories(db, user.id)
+        added = await ensure_default_exercises(db, user.id)
         if (await db.execute(select(AgentProfile).where(AgentProfile.owner_id == user.id))).first() is None:
             db.add(AgentProfile(owner_id=user.id, persona=DEFAULT_PERSONA, rules=[], style={}))
         if (await db.execute(select(Account).where(Account.owner_id == user.id, Account.kind == "cash"))).first() is None:
             db.add(Account(owner_id=user.id, name="Наличные", kind="cash", bank="cash", sort=90))
-        print(f"owner {user.id} ready")
+        print(f"owner {user.id} ready, {added} exercises added to the catalog")
 
 
 async def cmd_pair(days: int) -> None:
@@ -67,6 +69,7 @@ async def cmd_seed(path: str) -> None:
     async with session_scope() as db:
         user = await get_owner(db)
         await ensure_default_categories(db, user.id)
+        await ensure_default_exercises(db, user.id)
         prof = data.get("user", {})
         user.name = prof.get("name", user.name)
         user.timezone = prof.get("timezone", user.timezone)
