@@ -39,6 +39,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -182,8 +183,10 @@ fun ListRow(
     trailingColor: Color = Tone.current.text,
     icon: ImageVector? = null,
     iconTint: Color = Tone.current.divider,
-    onClick: (() -> Unit)? = null,
     extra: @Composable (() -> Unit)? = null,
+    // Last on purpose: `ListRow(...) { open() }` must bind the trailing lambda to the click, never to
+    // composable content (that would run the action on every recomposition).
+    onClick: (() -> Unit)? = null,
 ) {
     Row(
         Modifier.fillMaxWidth().let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(vertical = 10.dp),
@@ -244,7 +247,11 @@ fun SwitchRow(title: String, subtitle: String? = null, checked: Boolean, onChang
             Text(title, style = MaterialTheme.typography.bodyLarge)
             if (subtitle != null) Secondary(subtitle)
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        // The scheme maps outline and surfaceContainerHighest to the same divider tone, which would make the
+        // unchecked thumb invisible against its track.
+        Switch(checked = checked, onCheckedChange = onChange, colors = SwitchDefaults.colors(
+            uncheckedThumbColor = Tone.current.textSecondary, uncheckedBorderColor = Tone.current.textSecondary,
+            uncheckedTrackColor = Tone.current.surface))
     }
 }
 

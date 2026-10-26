@@ -76,7 +76,7 @@ private fun Welcome(next: () -> Unit) {
     AppCard(tint = Tone.current.memory) {
         Text("Что понадобится", style = MaterialTheme.typography.titleMedium)
         Gap(6)
-        Secondary("1. Код подключения с вашего сервера (команда `python -m app.cli pair`).")
+        Secondary("1. Одноразовый код подключения с вашего сервера.")
         Secondary("2. Текущие остатки на счетах — один раз, дальше всё считается само.")
         Secondary("3. Разрешения: уведомления, доступ к уведомлениям банков, отпечаток.")
     }
@@ -109,7 +109,8 @@ private fun Pairing(next: () -> Unit) {
                 (res["server"]?.jsonObject?.get("firebase") as? JsonObject)?.let {
                     c.prefs.set(Prefs.Keys.firebaseOptions, it.toString())
                 }
-                c.sync.syncNow(full = true)
+                // The code is spent at this point: a failed first sync must not strand the user on this screen.
+                runCatching { c.sync.syncNow(full = true) }
                 c.refreshLocalSettings()
                 c.initPush()
                 next()
