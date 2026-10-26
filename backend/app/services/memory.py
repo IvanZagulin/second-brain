@@ -111,9 +111,12 @@ async def search_memories(db: AsyncSession, owner_id: uuid.UUID, query: str, *, 
         return []
     scores = {r.id: 0.55 * float(r.vsim or 0) + 0.3 * min(float(r.fts or 0) * 10, 1) + 0.15 * float(r.trgm or 0)
               for r in rows}
-    mems = (await db.execute(select(Memory).where(Memory.id.in_(scores)))).scalars().all()
-    await db.execute(update(Memory).where(Memory.id.in_(scores))
-                     .values(use_count=Memory.use_count + 1, last_used_at=utcnow()))
+    # Usage counters are bumped with plain SQL (no ORM sync, no updated_at/server_seq churn) before
+    # the rows are loaded, so the returned objects are fresh.
+    await db.execute(text("UPDATE memories SET use_count = use_count + 1, last_used_at = now() WHERE id = ANY(:ids)"),
+                     {"ids": list(scores)})
+    mems = (await db.execute(select(Memory).where(Memory.id.in_(scores))
+                             .execution_options(populate_existing=True))).scalars().all()
     return sorted(((m, scores[m.id]) for m in mems), key=lambda x: -x[1])
 
 

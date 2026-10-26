@@ -45,6 +45,8 @@ class StatementData:
     account_hint: str | None = None  # last digits of the account / card
     rows: list[StatementRow] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    closing_balance_minor: int | None = None  # balance confirmed by the bank at closing_at
+    closing_at: datetime | None = None
 
 
 class UnsupportedStatement(ValueError):
@@ -338,6 +340,12 @@ def parse_tbank_business_pdf(pdf, text: str, tz_name: str) -> StatementData:
     operation is the block of lines from a dated line to the next one."""
     acc = re.search(r"Выписка по счету №\s*(\d{20})", text)
     data = StatementData(bank="tbank_business", format="tbank_pdf", account_hint=acc.group(1)[-4:] if acc else None)
+    closing = re.search(r"Исходящий остаток:\s*(\d[\d  ]*\.\d{2})", text)
+    formed = re.search(r"Дата формирования:\s*(\d{2}\.\d{2}\.\d{4})\s*/\s*(\d{2}:\d{2}:\d{2})", text)
+    if closing and formed:
+        data.closing_balance_minor = to_minor(closing.group(1))
+        parsed_formed = _parse_dt(f"{formed.group(1)} {formed.group(2)}", tz_name)
+        data.closing_at = parsed_formed[0] if parsed_formed else None
     cols: dict[str, float] = {}
     blocks: list[list[list[dict]]] = []
     current: list[list[dict]] | None = None

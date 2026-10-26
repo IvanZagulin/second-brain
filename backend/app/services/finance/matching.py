@@ -310,8 +310,12 @@ async def ingest_statement(db: AsyncSession, owner_id: uuid.UUID, data: Statemen
         report[res.status] = report.get(res.status, 0) + 1
         if row.balance_after_minor is not None:
             latest_balance = (row.occurred_at, row.balance_after_minor)
+    if account and data.closing_balance_minor is not None and data.closing_at is not None:
+        latest_balance = (data.closing_at, data.closing_balance_minor)
     if account and latest_balance:
         _update_confirmed_balance(account, latest_balance[1], latest_balance[0], "statement")
+        account.version += 1
+        report["balance_confirmed_minor"] = latest_balance[1]
     return report
 
 
