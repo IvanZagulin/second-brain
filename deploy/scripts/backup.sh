@@ -5,6 +5,7 @@
 #   retention: BACKUP_KEEP_DAYS (0 = keep forever); only files matching brain-*.dump.enc are touched
 # Run once by hand:  docker compose run --rm backup now
 set -u
+umask 077  # dumps are encrypted, but nobody else on the host needs to read them
 
 backup_once() {
   local stamp file
@@ -14,7 +15,10 @@ backup_once() {
         -pass env:BACKUP_PASSPHRASE -out "${file}.tmp"; then
     echo "$(date -Is) backup FAILED (dump)"; rm -f "${file}.tmp"; return 1
   fi
-  if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_PASSPHRASE -in "${file}.tmp" \
+  # The whole file must decrypt (catches truncation) and the archive table of contents must be readable.
+  # pg_restore --list stops after the TOC, so openssl's broken-pipe complaint there is expected and muted.
+  if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_PASSPHRASE -in "${file}.tmp" > /dev/null \
+     || ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_PASSPHRASE -in "${file}.tmp" 2> /dev/null \
         | pg_restore --list > /dev/null; then
     echo "$(date -Is) backup FAILED (verify)"; rm -f "${file}.tmp"; return 1
   fi
