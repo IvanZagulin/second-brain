@@ -16,8 +16,10 @@ keystore.properties
 google-services.json
 *firebase-adminsdk*.json
 secrets/
-data/
-backups/
+/data/
+/backend/data/
+/deploy/data/
+/backups/
 *.dump
 *.sql.gz
 *.enc

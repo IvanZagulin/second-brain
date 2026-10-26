@@ -90,8 +90,8 @@ object HealthSync {
         val items = mutableListOf<JsonObject>()
         fun dayStart(ld: java.time.LocalDateTime) = ld.atZone(zone).toInstant().toString()
 
-        suspend fun daily(metric: androidx.health.connect.client.aggregate.AggregateMetric<*>, kind: String, unit: String,
-                          value: (Any) -> Double) {
+        suspend fun <T : Any> daily(metric: androidx.health.connect.client.aggregate.AggregateMetric<T>, kind: String,
+                                    unit: String, value: (T) -> Double) {
             val res = client.aggregateGroupByPeriod(AggregateGroupByPeriodRequest(setOf(metric),
                 TimeRangeFilter.between(startLdt, endLdt), Period.ofDays(1)))
             for (g in res) {
@@ -101,15 +101,13 @@ object HealthSync {
             }
         }
         if (HealthPermission.getReadPermission(StepsRecord::class) in granted)
-            daily(StepsRecord.COUNT_TOTAL, "steps", "count") { (it as Long).toDouble() }
+            daily(StepsRecord.COUNT_TOTAL, "steps", "count") { it.toDouble() }
         if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted)
-            daily(HeartRateRecord.BPM_AVG, "heart_rate", "bpm") { (it as Long).toDouble() }
+            daily(HeartRateRecord.BPM_AVG, "heart_rate", "bpm") { it.toDouble() }
         if (HealthPermission.getReadPermission(RestingHeartRateRecord::class) in granted)
-            daily(RestingHeartRateRecord.BPM_AVG, "resting_hr", "bpm") { (it as Long).toDouble() }
+            daily(RestingHeartRateRecord.BPM_AVG, "resting_hr", "bpm") { it.toDouble() }
         if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted)
-            daily(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL, "active_kcal", "kcal") {
-                (it as androidx.health.connect.client.units.Energy).inKilocalories
-            }
+            daily(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL, "active_kcal", "kcal") { it.inKilocalories }
 
         val range = TimeRangeFilter.between(startDate.atStartOfDay(zone).toInstant(), Instant.now())
         if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) {
