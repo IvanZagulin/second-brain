@@ -288,7 +288,7 @@ fun WorkoutScreen(id: String) {
             ExerciseCard(ex, target, mySets, previous[exId].orEmpty(), inProgress,
                 onAdd = { weight, reps, rpe ->
                     act(null) {
-                        c.store.save(E.SETS, jsonOf("workout_id" to id, "exercise_id" to exId, "set_no" to mySets.size + 1,
+                        c.store.save(E.SETS, jsonOf("workout_id" to id, "exercise_id" to exId, "set_no" to mySets.count { !it.isWarmup } + 1,
                             "weight" to weight, "reps" to reps, "rpe" to rpe, "done_at" to nowIso()))
                         restTotal = target?.restSeconds ?: c.prefs.get(ru.secondbrain.app.core.Prefs.Keys.restSeconds) ?: 90
                         restLeft = restTotal
@@ -309,7 +309,11 @@ fun WorkoutScreen(id: String) {
         var name by remember { mutableStateOf("") }
         var group by remember { mutableStateOf("other") }
         Text("Упражнение", style = MaterialTheme.typography.headlineSmall)
-        val matches = exercises.filter { !it.archived && (name.isBlank() || it.name.contains(name, true)) && it.id !in order }.take(8)
+        // Today's muscle groups first (in plan order), then everything else alphabetically.
+        val focus = plan?.muscleGroups.orEmpty()
+        val matches = exercises.filter { !it.archived && (name.isBlank() || it.name.contains(name, true)) && it.id !in order }
+            .sortedWith(compareBy({ focus.indexOf(it.muscleGroup).let { i -> if (i < 0) focus.size else i } }, { it.name }))
+            .take(8)
         Field(name, { name = it }, "Найти или создать")
         matches.forEach { e ->
             ListRow(e.name, MUSCLE_GROUPS[e.muscleGroup], onClick = {

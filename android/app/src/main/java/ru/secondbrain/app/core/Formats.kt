@@ -60,14 +60,16 @@ fun ruWeekdayName(isoDay: Int) = weekdays[(isoDay - 1).coerceIn(0, 6)]
 fun time(i: Instant): String = i.local().format(DateTimeFormatter.ofPattern("HH:mm"))
 
 /** "сегодня 14:05", "вчера 09:12", "3 октября 18:00". */
-fun relative(i: Instant?): String {
+/** "сегодня 14:14", "вчера 9:05", "19 октября 21:00"; [withTime] = false for date-only values (statement rows). */
+fun relative(i: Instant?, withTime: Boolean = true): String {
     if (i == null) return ""
     val z = i.local()
     val today = LocalDate.now()
+    val t = if (withTime) " ${time(i)}" else ""
     return when (val d = z.toLocalDate()) {
-        today -> "сегодня ${time(i)}"
-        today.minusDays(1) -> "вчера ${time(i)}"
-        else -> "${ruDate(d)} ${time(i)}"
+        today -> "сегодня$t"
+        today.minusDays(1) -> "вчера$t"
+        else -> "${ruDate(d)}$t"
     }
 }
 

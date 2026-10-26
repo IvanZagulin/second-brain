@@ -67,8 +67,10 @@ class SyncManager(
                 push()
                 if (full) prefs.set(Prefs.Keys.syncCursor, 0L)
                 pull()
-                uploadBankNotifications()
-                sendPendingMessages()
+                // Bank notifications become transactions and queued chat messages get answered on the server
+                // right away: pull again so the results show now, not on the next sync.
+                val uploaded = uploadBankNotifications() + sendPendingMessages()
+                if (uploaded > 0) pull()
                 pollNotifications()
                 refreshHome()
                 val now = System.currentTimeMillis()
@@ -153,10 +155,10 @@ class SyncManager(
         }
     }
 
-    private suspend fun uploadBankNotifications() {
+    private suspend fun uploadBankNotifications(): Int {
         val dao = db.bankNotifications()
         val pending = dao.pending()
-        if (pending.isEmpty()) return
+        if (pending.isEmpty()) return 0
         val items = JsonArray(pending.map {
             jsonOf("package" to it.packageName, "title" to it.title, "text" to it.text,
                 "posted_at" to Instant.ofEpochMilli(it.postedAt).toString())
@@ -165,10 +167,12 @@ class SyncManager(
         pending.zip(res).forEach { (n, r) -> dao.markUploaded(n.id, r.jsonObject.str("status")) }
         dao.prune(System.currentTimeMillis() - 14L * 24 * 3600 * 1000)
         AppLog.i("sync", "uploaded ${pending.size} bank notifications")
+        return pending.size
     }
 
-    private suspend fun sendPendingMessages() {
+    private suspend fun sendPendingMessages(): Int {
         val dao = db.pendingMessages()
+        var sent = 0
         for (m in dao.sendable()) {
             dao.setStatus(m.clientMessageId, "sending", null)
             try {
@@ -176,11 +180,13 @@ class SyncManager(
                     "text" to m.text, "client_message_id" to m.clientMessageId, "mode" to m.mode,
                     "attachment_ids" to PlainJson.parseToJsonElement(m.attachmentIds)), mapOf("stream" to "false"))
                 dao.remove(m.clientMessageId)
+                sent++
             } catch (e: ApiException) {
                 dao.setStatus(m.clientMessageId, if (e.isOffline) "pending" else "failed", e.message)
                 if (e.isOffline) throw e
             }
         }
+        return sent
     }
 
     private suspend fun pollNotifications() {

@@ -48,6 +48,7 @@ import ru.secondbrain.app.core.parseInstant
 import ru.secondbrain.app.core.relative
 import ru.secondbrain.app.data.model.E
 import ru.secondbrain.app.data.model.LifeEvent
+import ru.secondbrain.app.data.model.MEMORY_CATEGORIES
 import ru.secondbrain.app.data.model.MEMORY_TYPES
 import ru.secondbrain.app.data.model.Memory
 import ru.secondbrain.app.data.model.Person
@@ -163,7 +164,7 @@ private fun MemoryRow(content: String, type: String, category: String?, status: 
         Gap(4)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Pill(MEMORY_TYPES[type] ?: type, Tone.current.memory)
-            if (category != null && category != "general") Pill(category)
+            if (category != null && category != "general") Pill(MEMORY_CATEGORIES[category] ?: category)
             if (status == "unconfirmed" && confidence != null) Pill("уверенность ${(confidence * 100).toInt()}%", Tone.current.motivation)
             if (status == "confirmed") Pill("подтверждено", Tone.current.finance)
         }

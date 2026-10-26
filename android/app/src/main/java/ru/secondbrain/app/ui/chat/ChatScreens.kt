@@ -141,7 +141,14 @@ fun ChatScreen(conversationId: String) {
     var uploading by remember { mutableStateOf(false) }
     var modeMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val visible = messages.filter { it.role != "assistant" || it.text.isNotBlank() }.sortedBy { it.createdAt ?: "" }
+    // Tool results and tool-only assistant turns are plumbing: their effect shows as chips on the answer.
+    val visible = messages.filter {
+        when (it.role) {
+            "user", "trigger" -> true
+            "assistant" -> it.text.isNotBlank()
+            else -> false
+        }
+    }.sortedBy { it.createdAt ?: "" }
 
     LaunchedEffect(visible.size, live?.answer?.length, pending.size) {
         val count = visible.size + pending.size + (if (live != null) 2 else 0)

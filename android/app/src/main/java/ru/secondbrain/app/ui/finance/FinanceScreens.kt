@@ -259,7 +259,7 @@ private fun SummaryCard(s: JsonObject, onAccounts: () -> Unit) {
 fun TxRow(t: Transaction, cats: Map<String, BudgetCategory>, onClick: () -> Unit) {
     val cat = t.categoryId?.let { cats[it] }
     val sub = listOfNotNull(cat?.name ?: if (t.direction == "out" && t.flowType == "expense") "Без категории" else null,
-        t.at?.let { relative(it) }, if (t.scope == "business") "ИП" else null).joinToString(" · ")
+        t.at?.let { relative(it, t.hasTime) }, if (t.scope == "business") "ИП" else null).joinToString(" · ")
     AppCard(onClick = onClick, padding = 12.dp) {
         ListRow(t.title, sub, (if (t.direction == "in") "+" else "−") + rub(t.amountMinor, true).removePrefix("−"),
             trailingColor = if (t.direction == "in") Tone.current.positive else Tone.current.text,

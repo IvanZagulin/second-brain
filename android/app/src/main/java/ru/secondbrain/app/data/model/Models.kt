@@ -290,6 +290,12 @@ val MEMORY_TYPES = linkedMapOf(
     "analytical" to "Выводы",
 )
 
+val MEMORY_CATEGORIES = linkedMapOf(
+    "biography" to "Биография", "interests" to "Интересы", "preferences" to "Предпочтения", "goals" to "Цели",
+    "people" to "Люди", "health" to "Здоровье", "finance" to "Деньги", "work" to "Работа",
+    "relationships" to "Отношения", "habits" to "Привычки", "fitness" to "Тренировки", "general" to "Общее",
+)
+
 val CHAT_MODES = linkedMapOf(
     "auto" to "Авто", "normal" to "Обычный", "coach" to "Жёсткий коуч", "psych" to "Психологический разбор",
     "finance" to "Финансовый аналитик", "trainer" to "Тренер", "critic" to "Критик", "companion" to "Собеседник",

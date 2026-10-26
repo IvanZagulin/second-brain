@@ -47,6 +47,8 @@ async def workout_analysis(owner_id: uuid.UUID, workout_id: uuid.UUID) -> dict[s
         ex_names = {e.id: e.name for e in (await db.execute(select(Exercise).where(Exercise.owner_id == owner_id))).scalars()}
         lines = defaultdict(list)
         for s in sets:
+            if s.is_warmup and not s.reps:
+                continue  # placeholder the app writes when an exercise is added before its first set
             lines[s.exercise_id].append(f"{float(s.weight or 0):g}×{s.reps or 0}" + (" (разминка)" if s.is_warmup else "")
                                         + (f" RPE{float(s.rpe):g}" if s.rpe else ""))
         today_s = "\n".join(f"- {ex_names.get(k, '?')}: {', '.join(v)}" for k, v in lines.items())

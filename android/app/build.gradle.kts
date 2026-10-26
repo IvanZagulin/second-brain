@@ -16,7 +16,7 @@ val appVersionCode = versionParts[0] * 10000 + versionParts[1] * 100 + versionPa
 // Signing: keystore.properties next to this file locally, or SIGNING_* environment variables in CI.
 val signingProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
-    if (f.exists()) f.inputStream().use { load(it) }
+    if (f.exists()) f.reader(Charsets.UTF_8).use { load(it) }  // UTF-8: the keystore path may contain Cyrillic
 }
 fun signingValue(key: String, env: String): String? = signingProps.getProperty(key) ?: System.getenv(env)
 

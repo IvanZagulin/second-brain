@@ -502,9 +502,10 @@ fun UpdatesScreen() {
     var checking by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(-1f) }
     var error by remember { mutableStateOf<String?>(null) }
+    var checked by remember { mutableStateOf(false) }
     fun check() = scope.launch {
         checking = true; error = null
-        try { release = c.updates.latest() } catch (e: Exception) { error = e.message }
+        try { release = c.updates.latest(); checked = true } catch (e: Exception) { error = e.message }
         checking = false
     }
     LaunchedEffect(Unit) { check() }
@@ -517,6 +518,9 @@ fun UpdatesScreen() {
             }
         }
         error?.let { item { ErrorCard(it) } }
+        if (checked && release == null && error == null) item {
+            AppCard { Secondary("Опубликованных версий пока нет — установлена актуальная.") }
+        }
         release?.let { r ->
             item {
                 val newer = c.updates.isNewer(r.version)

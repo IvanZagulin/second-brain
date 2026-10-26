@@ -106,10 +106,13 @@ fun AnalyticsScreen() {
             item {
                 AppCard {
                     Text("Claude API", style = MaterialTheme.typography.titleMedium)
-                    Secondary("Потрачено $${u.str("spent_usd")} из $${u.str("limit_usd")}, прогноз на месяц $${u.str("forecast_usd")}")
+                    fun usd(key: String) = "$%.2f".format(u.str(key)?.toDoubleOrNull() ?: 0.0)
+                    Secondary("Потрачено ${usd("spent_usd")} из ${"$%.0f".format(u.str("limit_usd")?.toDoubleOrNull() ?: 0.0)}, " +
+                        "прогноз на месяц ${usd("forecast_usd")}")
                     Gap(6)
                     Bars(u["by_model"]?.jsonArray.orEmpty().map { it.jsonObject }.map {
-                        Triple(it.str("model") ?: "", it.str("cost_usd")?.toDoubleOrNull() ?: 0.0, "$" + (it.str("cost_usd") ?: "0"))
+                        val cost = it.str("cost_usd")?.toDoubleOrNull() ?: 0.0
+                        Triple(it.str("model") ?: "", cost, "$%.2f".format(cost))
                     })
                 }
             }

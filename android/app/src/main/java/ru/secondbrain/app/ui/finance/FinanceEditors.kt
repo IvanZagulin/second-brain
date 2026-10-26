@@ -119,7 +119,7 @@ fun TransactionScreen(id: String?) {
         if (loaded) return@LaunchedEffect
         amount = minorText(t.amountMinor); direction = t.direction; flow = t.flowType; scope = t.scope
         category = t.categoryId; account = t.accountId; merchant = t.merchant ?: ""; note = t.note ?: t.description ?: ""
-        t.at?.local()?.let { date = it.toLocalDate(); time = it.toLocalTime().withSecond(0).withNano(0) }
+        t.at?.local()?.let { date = it.toLocalDate(); time = if (t.hasTime) it.toLocalTime().withSecond(0).withNano(0) else null }
         loaded = true
     }
 
@@ -172,11 +172,11 @@ fun TransactionScreen(id: String?) {
         item {
             Button(modifier = Modifier.then(Modifier), onClick = {
                 val minor = parseRubToMinor(amount) ?: return@Button
-                val at = (date ?: LocalDate.now()).atTime(time ?: LocalTime.NOON).atZone(ZoneId.systemDefault()).toOffsetDateTime().toString()
+                val at = (date ?: LocalDate.now()).atTime(time ?: LocalTime.MIDNIGHT).atZone(ZoneId.systemDefault()).toOffsetDateTime().toString()
                 act(null) {
                     c.store.save(E.TRANSACTIONS, jsonOf("amount_minor" to minor, "direction" to direction, "flow_type" to flow,
                         "scope" to scope, "category_id" to category, "account_id" to account, "merchant" to merchant.ifBlank { null },
-                        "note" to note.ifBlank { null }, "occurred_at" to at, "has_time" to true, "currency" to "RUB") +
+                        "note" to note.ifBlank { null }, "occurred_at" to at, "has_time" to (time != null), "currency" to "RUB") +
                         (if (id == null) jsonOf("origin" to "manual", "status" to "confirmed", "description" to note.ifBlank { null })
                         else jsonOf("category_source" to if (category != existing?.categoryId) "user" else existing?.categorySource)), id)
                     back()

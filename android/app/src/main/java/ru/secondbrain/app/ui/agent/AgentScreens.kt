@@ -97,7 +97,7 @@ fun AgentJobsScreen() {
         item { SectionTitle("Запланировано") }
         items(scheduled, key = { it.id }) { j ->
             AppCard(padding = 12.dp, tint = if (j.createdBy == "agent") Tone.current.memory else Tone.current.surface) {
-                ListRow(j.goal, listOfNotNull(jobKind(j.kind), j.recurrence?.let { "повтор $it" }, parseInstant(j.nextRunAt)?.let { "следующий запуск ${relative(it)}" },
+                ListRow(j.goal, listOfNotNull(jobKind(j.kind), j.recurrence?.let { recurrenceLabel(it) }, parseInstant(j.nextRunAt)?.let { "следующий запуск ${relative(it)}" },
                     j.reason, if (j.status == "paused") "на паузе" else null).joinToString(" · "))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (j.status == "paused") TextButton(onClick = { act(null) { c.store.putFromServer(E.JOBS, c.api.patch("/api/v1/agent/jobs/${j.id}", jsonOf("status" to "scheduled"))) } }) { Text("Возобновить") }
@@ -114,6 +114,28 @@ fun AgentJobsScreen() {
             AppCard(padding = 10.dp) { ListRow(eventLabel(e.str("type")), "${e.str("status")} · ${relative(parseInstant(e.str("occurred_at")))}") }
         }
     }
+}
+
+/** The descriptions are Russian imperatives ("Записать важное событие жизни (конфликт, …)"): the first clause is the title. */
+private fun toolTitle(description: String, name: String): String =
+    description.split(". ", " (", ": ", " — ").first().trim().trimEnd('.').ifBlank { name }
+
+/** "every:15m" → "каждые 15 мин", "daily@07:40" → "ежедневно в 07:40", "weekly:7@19:00" → "по вс в 19:00". */
+fun recurrenceLabel(r: String): String {
+    Regex("""every:(\d+)([mhd])""").matchEntire(r)?.let { m ->
+        val unit = mapOf("m" to "мин", "h" to "ч", "d" to "дн")[m.groupValues[2]]
+        return "каждые ${m.groupValues[1]} $unit"
+    }
+    Regex("""daily@(\d{1,2}:\d{2})""").matchEntire(r)?.let { return "ежедневно в ${it.groupValues[1]}" }
+    Regex("""weekly:([\d,]+)@(\d{1,2}:\d{2})""").matchEntire(r)?.let { m ->
+        val days = listOf("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+        val names = m.groupValues[1].split(",").mapNotNull { it.toIntOrNull()?.let { d -> days.getOrNull(d - 1) } }
+        return "по ${names.joinToString(", ")} в ${m.groupValues[2]}"
+    }
+    Regex("""monthly:(\d+)@(\d{1,2}:\d{2})""").matchEntire(r)?.let { m ->
+        return "ежемесячно ${m.groupValues[1]}-го в ${m.groupValues[2]}"
+    }
+    return r
 }
 
 fun jobKind(k: String) = mapOf("followup" to "возврат к теме", "initiative" to "сообщение", "daily_checks" to "проверки",
@@ -174,8 +196,9 @@ fun ToolsScreen() {
                 val name = t.str("name")!!
                 val min = t.str("min_level") ?: "A"
                 AppCard(padding = 12.dp) {
-                    Text(name, style = MaterialTheme.typography.titleSmall)
-                    Secondary(t.str("description") ?: "", maxLines = 3)
+                    val description = t.str("description") ?: ""
+                    Text(toolTitle(description, name), style = MaterialTheme.typography.titleSmall)
+                    Secondary(description, maxLines = 3)
                     ChoiceChips(listOf("A", "B", "C").filter { lvl -> "ABC".indexOf(lvl) >= "ABC".indexOf(min) }.map { it to it }, t.str("level"), { lvl ->
                         act(null) { c.api.put("/api/v1/agent/tools/$name", jsonOf("level" to lvl)); data.reload() }
                     })

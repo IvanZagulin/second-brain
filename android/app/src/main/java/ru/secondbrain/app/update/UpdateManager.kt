@@ -147,6 +147,7 @@ class UpdateManager(private val context: Context, private val api: ApiClient, pr
 class UpdateCheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val c = (applicationContext as SecondBrainApp).container
+        if (!c.prefs.isPaired()) return Result.success()  // the release feed is served by our server and needs a token
         val rel = runCatching { c.updates.latest() }.getOrNull() ?: return Result.success()
         if (c.updates.isNewer(rel.version)) {
             c.notifier.simple(7001, "Доступно обновление ${rel.version}", "Откройте «Обновления», чтобы установить.")
