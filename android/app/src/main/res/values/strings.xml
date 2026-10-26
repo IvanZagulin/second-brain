@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Второй мозг</string>
+    <string name="share_label">Второй мозг</string>
+    <string name="listener_label">Учёт платежей «Второго мозга»</string>
+    <string name="widget_finance">Свободные деньги</string>
+    <string name="widget_agent">Агент</string>
+    <string name="widget_finance_desc">Сколько можно потратить сегодня</string>
+    <string name="widget_agent_desc">Последнее сообщение агента и быстрый чат</string>
+</resources>

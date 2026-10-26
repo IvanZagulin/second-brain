@@ -128,6 +128,21 @@ async def health_summary(days: int = Query(14, le=365), auth: Auth = Depends(get
     return out
 
 
+class MealEstimateIn(BaseModel):
+    description: str | None = None
+    attachment_id: uuid.UUID | None = None
+    estimate: bool = True
+
+
+@health_router.post("/meals/estimate")
+async def meal_estimate(body: MealEstimateIn, auth: Auth = Depends(get_auth), db: AsyncSession = Depends(get_db)):
+    """Save a meal; with an estimate, Claude evaluates calories and macros (with an error margin)."""
+    from agent.estimates import estimate_meal
+    await db.commit()
+    meal = await estimate_meal(auth.owner_id, body.description, body.attachment_id, body.estimate)
+    return serialize(meal)
+
+
 crud_routers = [
     crud_router(Exercise, "/api/v1/workouts/exercises", "fitness", order_by="name"),
     crud_router(WorkoutPlan, "/api/v1/workouts/plans", "fitness", order_by="weekday"),

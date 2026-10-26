@@ -191,7 +191,18 @@ async def home(auth: Auth = Depends(get_auth), db: AsyncSession = Depends(get_db
     }
 
 
+experiments_router = APIRouter(prefix="/api/v1/experiments", tags=["tasks"])
+
+
+@experiments_router.post("/{exp_id}/evaluate")
+async def evaluate(exp_id: uuid.UUID, auth: Auth = Depends(get_auth), db: AsyncSession = Depends(get_db)):
+    from agent.estimates import evaluate_experiment
+    await db.commit()
+    return serialize(await evaluate_experiment(auth.owner_id, exp_id))
+
+
 crud_routers = [
+    experiments_router,
     crud_router(Task, "/api/v1/tasks", "tasks", order_by="due_at"),
     crud_router(Habit, "/api/v1/habits", "tasks", order_by="created_at"),
     crud_router(HabitLog, "/api/v1/habit-logs", "tasks", order_by="day"),
