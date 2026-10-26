@@ -52,6 +52,7 @@ def main() -> int:
             "posted_at": now.isoformat()}
     r = c.post("/api/v1/finance/notifications", json={"items": [note, note]})
     statuses = [x["status"] for x in r.json().get("results", [])] if r.status_code == 200 else []
+    cleanup = [f"/api/v1/finance/tx/{x['transaction_id']}" for x in r.json().get("results", []) if x.get("transaction_id")]
     check("notification ingest + dedupe", statuses == ["created", "duplicate"], str(statuses))
 
     if samples and samples.exists():
@@ -78,6 +79,7 @@ def main() -> int:
     # Chat with streaming and tools.
     r = c.post("/api/v1/chat/conversations", json={"title": "smoke", "mode": "auto"})
     conv = r.json()["id"]
+    cleanup.append(f"/api/v1/chat/conversations/{conv}")
     events, text = [], ""
     t0 = time.time()
     with c.stream("POST", f"/api/v1/chat/conversations/{conv}/messages",
@@ -98,7 +100,7 @@ def main() -> int:
     check("chat used a tool", "tool" in events, "")
 
     r = c.post(f"/api/v1/chat/conversations/{conv}/messages", params={"stream": "false"},
-               json={"text": "Запомни: мой любимый спорт — плавание.", "client_message_id": str(uuid.uuid4())})
+               json={"text": "Это технический тест связи, ответь одним словом: ок.", "client_message_id": str(uuid.uuid4())})
     check("chat non-stream", r.status_code == 200 and r.json().get("message"), (r.json().get("message") or {}).get("text", "")[:120])
 
     # Sync: push an offline-created workout set chain, then pull.
@@ -110,6 +112,8 @@ def main() -> int:
         {"entity": "exercises", "id": ex_id, "data": {"name": "Тяга штанги в наклоне", "muscle_group": "back"}},
         {"entity": "workouts", "id": workout_id, "data": {"started_at": now.isoformat(), "status": "in_progress"}},
     ]
+    cleanup += [f"/api/v1/workouts/sets/{changes[0]['id']}", f"/api/v1/workouts/sessions/{workout_id}",
+                f"/api/v1/workouts/exercises/{ex_id}"]
     r = c.post("/api/v1/sync/push", json={"changes": changes})
     st = [x["status"] for x in r.json().get("results", [])] if r.status_code == 200 else [r.text[:200]]
     check("sync push (dependency order)", all(s == "applied" for s in st), str(st))
@@ -128,6 +132,8 @@ def main() -> int:
     r = c.get("/api/v1/agent/tools")
     check("agent tools", r.status_code == 200 and len(r.json()["items"]) > 20, f"{len(r.json()['items'])} tools")
 
+    for path in cleanup:  # soft-delete everything this test created
+        c.delete(path)
     me = c.get("/api/v1/auth/me").json()
     c.post(f"/api/v1/auth/devices/{me['device']['id']}/revoke")
     failed = [n for n, ok, _ in results if not ok]
