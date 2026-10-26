@@ -1,0 +1,134 @@
+# Second Brain backend stack. Lives next to other projects on the same VPS, so:
+# - nothing is published except the API on 127.0.0.1 (nginx terminates TLS in front of it);
+# - every service has a memory limit;
+# - the network uses its own subnet that no other project on the host uses.
+name: second-brain
+
+x-app: &app
+  image: second-brain-app:latest
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    REDIS_URL: redis://redis:6379/0
+    EMBEDDER_URL: http://embedder:8000
+    DATA_DIR: /data
+    SECRETS_DIR: /secrets
+  volumes:
+    - appdata:/data
+    - ./secrets:/secrets:ro
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_started
+  networks: [brain]
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command: >
+      postgres -c shared_buffers=96MB -c work_mem=8MB -c maintenance_work_mem=64MB
+      -c effective_cache_size=256MB -c max_connections=40 -c timezone=UTC
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+    networks: [brain]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy noeviction
+    volumes:
+      - redisdata:/data
+    mem_limit: 128m
+    networks: [brain]
+
+  embedder:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.embedder
+    image: second-brain-embedder:latest
+    restart: unless-stopped
+    volumes:
+      - models:/models
+    mem_limit: 900m
+    networks: [brain]
+
+  api:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: >
+      sh -c "alembic -c database/alembic.ini upgrade head && python -m app.cli init &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"
+    ports:
+      - "127.0.0.1:8040:8000"
+    mem_limit: 450m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  worker:
+    <<: *app
+    command: arq workers.worker.WorkerSettings
+    mem_limit: 450m
+
+  scheduler:
+    <<: *app
+    command: python -m workers.scheduler
+    mem_limit: 200m
+
+  backup:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "/scripts/backup.sh"]
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-30}
+      BACKUP_AT: ${BACKUP_AT:-04:00}
+      TZ: ${TZ:-Europe/Moscow}
+    volumes:
+      - ./scripts:/scripts:ro
+      - ${BACKUP_DIR:-/var/backups/second-brain}:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 128m
+    networks: [brain]
+
+networks:
+  brain:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.240.0/24
+
+volumes:
+  pgdata:
+  redisdata:
+  appdata:
+  models:

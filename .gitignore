@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Secrets and local data — never commit
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+keystore.properties
+google-services.json
+*firebase-adminsdk*.json
+secrets/
+data/
+backups/
+*.dump
+*.sql.gz
+*.enc
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/release/
+*.apk
+*.aab
+captures/
+.kotlin/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

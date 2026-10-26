@@ -1,0 +1,11 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 FASTEMBED_CACHE=/models
+WORKDIR /srv
+COPY backend/embedder/requirements.txt /srv/requirements.txt
+RUN pip install -r /srv/requirements.txt
+COPY backend/embedder/main.py /srv/main.py
+RUN useradd --uid 10001 --create-home brain && mkdir -p /models && chown brain /models
+USER brain
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
