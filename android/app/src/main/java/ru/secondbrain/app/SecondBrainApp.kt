@@ -50,11 +50,11 @@ class AppContainer(val context: Context) {
     val prefs = Prefs(context)
     val db: AppDatabase by lazy { AppDatabase.create(context, prefs.databaseKey()) }
     val api = ApiClient(prefs)
-    val notifier by lazy { AgentNotifier(context, db) }
-    val store by lazy { RecordStore(db) { sync.requestSync(4) } }
-    val sync by lazy { SyncManager(context, api, db, prefs, store, notifier) }
-    val chat by lazy { ChatRepository(api, db, store, sync) }
-    val updates by lazy { UpdateManager(context, api, prefs) }
+    val notifier: AgentNotifier by lazy { AgentNotifier(context, db) }
+    val store: RecordStore by lazy { RecordStore(db) { sync.requestSync(4) } }
+    val sync: SyncManager by lazy { SyncManager(context, api, db, prefs, store, notifier) }
+    val chat: ChatRepository by lazy { ChatRepository(api, db, store, sync) }
+    val updates: UpdateManager by lazy { UpdateManager(context, api, prefs) }
 
     @Volatile private var packagesCache: Set<String>? = null
 
