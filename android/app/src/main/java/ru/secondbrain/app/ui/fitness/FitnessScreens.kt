@@ -118,8 +118,7 @@ fun FitnessScreen() {
     Screen("Тренировки", back = false, onRefresh = { c.sync.syncNow(); health.reload() },
         fab = {
             if (active == null) ExtendedFloatingActionButton(onClick = { start(nextPlan?.takeIf { nextDay == today } ?: nextPlan) },
-                icon = { Icon(Icons.Default.Add, null) }, text = { Text("Начать тренировку") },
-                containerColor = Tone.current.accent, contentColor = Tone.current.surface)
+                icon = { Icon(Icons.Default.Add, null) }, text = { Text("Начать тренировку") })
         }) {
         if (active != null) item {
             AppCard(tint = Tone.current.training, onClick = { nav("fitness/workout/${active.id}") }) {

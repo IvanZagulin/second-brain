@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -57,6 +58,14 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 
+/** Quiet inputs: hairline outline, neutral focus ring, clay caret. */
+@Composable
+fun fieldColors() = OutlinedTextFieldDefaults.colors(
+    unfocusedBorderColor = Tone.current.outline, focusedBorderColor = Tone.current.textSecondary,
+    focusedLabelColor = Tone.current.textSecondary, cursorColor = Tone.current.accent,
+    focusedContainerColor = Tone.current.surface, unfocusedContainerColor = Tone.current.surface,
+)
+
 @Composable
 fun Field(value: String, onChange: (String) -> Unit, label: String, modifier: Modifier = Modifier,
           singleLine: Boolean = true, number: Boolean = false, minLines: Int = 1, placeholder: String? = null) {
@@ -66,8 +75,7 @@ fun Field(value: String, onChange: (String) -> Unit, label: String, modifier: Mo
         keyboardOptions = if (number) KeyboardOptions(keyboardType = KeyboardType.Decimal) else KeyboardOptions.Default,
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
-        colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Tone.current.divider,
-            focusedContainerColor = Tone.current.surface, unfocusedContainerColor = Tone.current.surface),
+        colors = fieldColors(),
     )
 }
 
@@ -80,8 +88,7 @@ fun <T> Dropdown(label: String, options: List<Pair<T, String>>, selected: T?, on
             value = options.firstOrNull { it.first == selected }?.second ?: "—", onValueChange = {}, readOnly = true,
             label = { Text(label) }, trailingIcon = { Icon(Icons.Default.ArrowDropDown, null) },
             modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium,
-            colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Tone.current.divider,
-                unfocusedContainerColor = Tone.current.surface, focusedContainerColor = Tone.current.surface),
+            colors = fieldColors(),
         )
         Box(Modifier.matchParentSize().clickable { open = true })
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
@@ -96,8 +103,7 @@ fun DateField(label: String, value: LocalDate?, onChange: (LocalDate?) -> Unit, 
     Box(modifier.fillMaxWidth()) {
         OutlinedTextField(value = value?.let { ruDate(it, true) } ?: "", onValueChange = {}, readOnly = true,
             label = { Text(label) }, modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium,
-            colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Tone.current.divider,
-                unfocusedContainerColor = Tone.current.surface, focusedContainerColor = Tone.current.surface))
+            colors = fieldColors())
         Box(Modifier.matchParentSize().clickable { open = true })
     }
     if (open) {
@@ -120,8 +126,7 @@ fun TimeField(label: String, value: LocalTime?, onChange: (LocalTime) -> Unit, m
     Box(modifier.fillMaxWidth()) {
         OutlinedTextField(value = value?.toString()?.take(5) ?: "", onValueChange = {}, readOnly = true,
             label = { Text(label) }, modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium,
-            colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Tone.current.divider,
-                unfocusedContainerColor = Tone.current.surface, focusedContainerColor = Tone.current.surface))
+            colors = fieldColors())
         Box(Modifier.matchParentSize().clickable { open = true })
     }
     if (open) {
@@ -146,20 +151,27 @@ fun Sheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
 
 /** Minimal Markdown for agent answers: headings, **bold**, *italic*, `code`, bullet and numbered lists. */
 @Composable
-fun Markdown(text: String, color: Color = Tone.current.text) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+fun Markdown(text: String, color: Color = Tone.current.text, style: TextStyle = MaterialTheme.typography.bodyLarge) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         text.trim().split("\n").forEach { raw ->
             val line = raw.trimEnd()
             when {
-                line.isBlank() -> Spacer(Modifier.height(4.dp))
-                line.startsWith("#") -> Text(inline(line.trimStart('#').trim()), style = MaterialTheme.typography.titleMedium, color = color)
+                line.isBlank() -> Spacer(Modifier.height(2.dp))
+                line.startsWith("#") -> Text(inline(line.trimStart('#').trim()), color = color,
+                    style = style.copy(fontWeight = FontWeight.SemiBold))
                 line.trimStart().startsWith("- ") || line.trimStart().startsWith("* ") || line.trimStart().startsWith("• ") ->
-                    Row { Text("•  ", color = Tone.current.accent); Text(inline(line.trimStart().drop(2)), style = MaterialTheme.typography.bodyLarge, color = color) }
+                    Row {
+                        Text("•  ", style = style, color = Tone.current.textSecondary)
+                        Text(inline(line.trimStart().drop(2)), style = style, color = color)
+                    }
                 Regex("^\\s*\\d+[.)] ").containsMatchIn(line) -> {
                     val m = Regex("^\\s*(\\d+)[.)] (.*)").find(line)!!
-                    Row { Text("${m.groupValues[1]}.  ", color = Tone.current.accent); Text(inline(m.groupValues[2]), style = MaterialTheme.typography.bodyLarge, color = color) }
+                    Row {
+                        Text("${m.groupValues[1]}.  ", style = style, color = Tone.current.textSecondary)
+                        Text(inline(m.groupValues[2]), style = style, color = color)
+                    }
                 }
-                else -> Text(inline(line), style = MaterialTheme.typography.bodyLarge, color = color)
+                else -> Text(inline(line), style = style, color = color)
             }
         }
     }

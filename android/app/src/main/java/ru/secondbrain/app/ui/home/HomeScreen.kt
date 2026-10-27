@@ -1,6 +1,17 @@
 package ru.secondbrain.app.ui.home
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.outlined.Analytics
@@ -19,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -29,6 +41,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -66,9 +80,11 @@ import ru.secondbrain.app.ui.components.Pill
 import ru.secondbrain.app.ui.components.ProgressBar
 import ru.secondbrain.app.ui.components.Screen
 import ru.secondbrain.app.ui.components.SectionTitle
+import ru.secondbrain.app.ui.components.Spark
 import ru.secondbrain.app.ui.components.Secondary
 import ru.secondbrain.app.ui.components.SwitchRow
 import ru.secondbrain.app.ui.tasks.MoodSheet
+import ru.secondbrain.app.ui.theme.AgentProse
 import ru.secondbrain.app.ui.theme.Tone
 import java.time.LocalDate
 
@@ -92,25 +108,34 @@ fun HomeScreen() {
     var moodOpen by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { c.sync.refreshHome() }
 
-    Screen(title = home?.str("greeting") ?: "Привет", subtitle = "${ruWeekday(LocalDate.now()).replaceFirstChar { it.uppercase() }}, ${ruDate(LocalDate.now())}",
-        back = false, onRefresh = { c.sync.syncNow() },
-        actions = { IconButton(onClick = { nav("more") }) { Icon(Icons.Outlined.Tune, "Разделы") } }) {
+    Screen(title = "", back = false, onRefresh = { c.sync.syncNow() },
+        actions = { IconButton(onClick = { nav("more") }) { Icon(Icons.Outlined.Tune, "Разделы", tint = Tone.current.textSecondary) } }) {
 
         item {
-            AppCard(onClick = { scope.launch { nav("chat/${c.chat.newConversation()}") } }) {
+            Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.AutoAwesome, null, tint = Tone.current.accent)
-                    Text("  Спросить агента…", style = MaterialTheme.typography.bodyLarge, color = Tone.current.textSecondary)
+                    Spark(30.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text(home?.str("greeting") ?: "Привет", style = MaterialTheme.typography.displaySmall)
                 }
+                Text("${ruWeekday(LocalDate.now()).replaceFirstChar { it.uppercase() }}, ${ruDate(LocalDate.now())}",
+                    style = MaterialTheme.typography.bodyMedium, color = Tone.current.textSecondary,
+                    modifier = Modifier.padding(start = 42.dp, top = 2.dp))
             }
         }
 
+        item { AskBox { scope.launch { nav("chat/${c.chat.newConversation()}") } } }
+
         val obs = home?.get("observation") as? JsonObject
         if ("observation" in cards && obs != null) item {
-            AppCard(tint = Tone.current.memory, onClick = { obs.str("conversation_id")?.let { nav("chat/$it") } }) {
-                Label("Агент · ${relative(parseInstant(obs.str("at")))}")
-                Gap(6)
-                Text(obs.str("text") ?: "", style = MaterialTheme.typography.bodyLarge, maxLines = 6, overflow = TextOverflow.Ellipsis)
+            AppCard(onClick = { obs.str("conversation_id")?.let { nav("chat/$it") } }) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spark(12.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Label("Агент · ${relative(parseInstant(obs.str("at")))}")
+                }
+                Gap(8)
+                Text(obs.str("text") ?: "", style = AgentProse, maxLines = 6, overflow = TextOverflow.Ellipsis)
             }
         }
 
@@ -177,7 +202,7 @@ fun HomeScreen() {
                     Secondary(listOfNotNull(mood.str("cause"), relative(parseInstant(mood.str("occurred_at")))).joinToString(" · "))
                 } else Secondary("Настроение ещё не записано")
                 Gap(6)
-                Button(onClick = { moodOpen = true }) { Text("Записать настроение") }
+                OutlinedButton(onClick = { moodOpen = true }) { Text("Записать настроение") }
             }
         }
 
@@ -207,6 +232,25 @@ fun HomeScreen() {
     if (moodOpen) MoodSheet { moodOpen = false }
 }
 
+/** Claude-style composer stub: a calm field with a round send button; tapping opens a new conversation. */
+@Composable
+private fun AskBox(onOpen: () -> Unit) {
+    Surface(onClick = onOpen, shape = RoundedCornerShape(24.dp), color = Tone.current.surface,
+        border = BorderStroke(1.dp, Tone.current.outline), shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(start = 18.dp, end = 10.dp, top = 16.dp, bottom = 10.dp)) {
+            Text("Спросите о деньгах, тренировке или планах…", style = MaterialTheme.typography.bodyLarge,
+                color = Tone.current.textSecondary)
+            Row(Modifier.fillMaxWidth().padding(top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.size(36.dp).background(Tone.current.accent, RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.ArrowUpward, "Спросить", tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SectionsGrid(nav: (String) -> Unit) {
     val items = listOf(
@@ -222,7 +266,7 @@ private fun SectionsGrid(nav: (String) -> Unit) {
     )
     AppCard(padding = 6.dp) {
         items.forEachIndexed { i, (label, icon, route) ->
-            ListRow(label, icon = icon, iconTint = Tone.current.bg, onClick = { nav(route) })
+            ListRow(label, icon = icon, onClick = { nav(route) })
             if (i != items.lastIndex) Divider()
         }
     }

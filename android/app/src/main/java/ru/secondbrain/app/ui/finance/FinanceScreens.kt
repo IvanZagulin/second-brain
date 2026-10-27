@@ -137,7 +137,7 @@ fun FinanceScreen() {
     Screen("Финансы", back = false, onRefresh = { c.sync.syncNow(); summary.reload(); review.reload() },
         fab = {
             ExtendedFloatingActionButton(onClick = { nav("finance/new-tx") }, icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("Операция") }, containerColor = Tone.current.accent, contentColor = Tone.current.surface)
+                text = { Text("Операция") })
         }) {
         val s = summary.value
         item {

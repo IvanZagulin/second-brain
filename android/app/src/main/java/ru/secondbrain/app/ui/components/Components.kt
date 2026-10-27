@@ -101,7 +101,8 @@ fun Screen(
                     if (back) IconButton(onClick = goBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
                 },
                 actions = actions,
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Tone.current.bg),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Tone.current.bg,
+                    scrolledContainerColor = Tone.current.bg),
             )
         },
         floatingActionButton = fab,
@@ -124,19 +125,23 @@ fun Screen(
     }
 }
 
+/**
+ * The one card: paper surface, hairline border. [tint] is accepted for call-site compatibility but cards
+ * stay neutral — colour is reserved for the accent and for numbers that mean something (debt, overspend).
+ */
 @Composable
 fun AppCard(
     modifier: Modifier = Modifier,
-    tint: Color = Tone.current.surface,
+    @Suppress("UNUSED_PARAMETER") tint: Color = Tone.current.surface,
     onClick: (() -> Unit)? = null,
-    padding: Dp = 18.dp,
+    padding: Dp = 16.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth().animateContentSize(),
-        shape = RoundedCornerShape(24.dp),
-        color = tint,
-        border = if (tint == Tone.current.surface) BorderStroke(1.dp, Tone.current.divider) else null,
+        shape = RoundedCornerShape(18.dp),
+        color = Tone.current.surface,
+        border = BorderStroke(1.dp, Tone.current.divider),
         onClick = onClick ?: {},
         enabled = onClick != null,
     ) {
@@ -146,7 +151,7 @@ fun AppCard(
 
 @Composable
 fun SectionTitle(text: String, action: String? = null, onAction: (() -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(text, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
         if (action != null && onAction != null) TextButton(onClick = onAction) { Text(action) }
     }
@@ -166,14 +171,30 @@ fun BigNumber(text: String, color: Color = Tone.current.text) =
     Text(text, style = MaterialTheme.typography.displaySmall, color = color)
 
 @Composable
-fun Pill(text: String, tint: Color = Tone.current.divider, textColor: Color = Tone.current.text) {
-    Box(Modifier.background(tint, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)) {
+fun Pill(text: String, tint: Color = Tone.current.fill, textColor: Color = Tone.current.textSecondary) {
+    Box(Modifier.background(tint, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp)) {
         Text(text, style = MaterialTheme.typography.labelMedium, color = textColor)
     }
 }
 
 @Composable
 fun Dot(color: Color, size: Dp = 8.dp) = Box(Modifier.size(size).background(color, CircleShape))
+
+/** The app's mark: a hand-drawn-looking asterisk of uneven rays in the accent colour. */
+@Composable
+fun Spark(size: Dp = 28.dp, color: Color = Tone.current.accent) {
+    androidx.compose.foundation.Canvas(Modifier.size(size)) {
+        val c = center
+        val r = this.size.minDimension / 2
+        val rays = listOf(1.0f, 0.78f, 0.95f, 0.72f, 1.0f, 0.8f, 0.92f, 0.75f, 0.98f, 0.7f, 0.9f, 0.82f)
+        rays.forEachIndexed { i, len ->
+            val a = Math.toRadians(i * 360.0 / rays.size - 90.0)
+            val end = androidx.compose.ui.geometry.Offset(c.x + (r * len * kotlin.math.cos(a)).toFloat(),
+                c.y + (r * len * kotlin.math.sin(a)).toFloat())
+            drawLine(color, c, end, strokeWidth = r * 0.2f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        }
+    }
+}
 
 @Composable
 fun ListRow(
@@ -182,21 +203,19 @@ fun ListRow(
     trailing: String? = null,
     trailingColor: Color = Tone.current.text,
     icon: ImageVector? = null,
-    iconTint: Color = Tone.current.divider,
+    @Suppress("UNUSED_PARAMETER") iconTint: Color = Tone.current.divider,
     extra: @Composable (() -> Unit)? = null,
     // Last on purpose: `ListRow(...) { open() }` must bind the trailing lambda to the click, never to
     // composable content (that would run the action on every recomposition).
     onClick: (() -> Unit)? = null,
 ) {
     Row(
-        Modifier.fillMaxWidth().let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            Box(Modifier.size(40.dp).background(iconTint, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(icon, null, modifier = Modifier.size(20.dp), tint = Tone.current.text)
-            }
-            Spacer(Modifier.width(12.dp))
+            Icon(icon, null, modifier = Modifier.padding(horizontal = 4.dp).size(22.dp), tint = Tone.current.textSecondary)
+            Spacer(Modifier.width(14.dp))
         }
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -228,16 +247,17 @@ fun Loading() = Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = A
 
 @Composable
 fun ErrorCard(message: String, onRetry: (() -> Unit)? = null) {
-    AppCard(tint = Tone.current.training) {
-        Text(message, style = MaterialTheme.typography.bodyLarge)
+    AppCard {
+        Text(message, style = MaterialTheme.typography.bodyLarge, color = Tone.current.negative)
         if (onRetry != null) TextButton(onClick = onRetry) { Text("Повторить") }
     }
 }
 
 @Composable
 fun ProgressBar(progress: Float, color: Color = Tone.current.accent) =
-    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(8.dp),
-        color = color, trackColor = Tone.current.divider, strokeCap = androidx.compose.ui.graphics.StrokeCap.Round)
+    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(6.dp),
+        color = color, trackColor = Tone.current.fill, strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
+        gapSize = 0.dp, drawStopIndicator = {})
 
 @Composable
 fun SwitchRow(title: String, subtitle: String? = null, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -259,8 +279,12 @@ fun SwitchRow(title: String, subtitle: String? = null, checked: Boolean, onChang
 fun <T> ChoiceChips(options: List<Pair<T, String>>, selected: T?, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         options.forEach { (value, label) ->
-            FilterChip(selected = value == selected, onClick = { onSelect(value) }, label = { Text(label) },
-                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Tone.current.training))
+            val isSelected = value == selected
+            FilterChip(selected = isSelected, onClick = { onSelect(value) }, label = { Text(label) },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Tone.current.fill,
+                    selectedLabelColor = Tone.current.text, labelColor = Tone.current.textSecondary),
+                border = FilterChipDefaults.filterChipBorder(enabled = true, selected = isSelected,
+                    borderColor = Tone.current.divider, selectedBorderColor = Tone.current.outline))
         }
     }
 }
@@ -273,11 +297,13 @@ fun ConfirmDialog(title: String, text: String, confirm: String = "Да", onConfi
 }
 
 @Composable
-fun StatTile(label: String, value: String, tint: Color, modifier: Modifier = Modifier, hint: String? = null) {
-    Surface(modifier, shape = RoundedCornerShape(20.dp), color = tint) {
+fun StatTile(label: String, value: String, @Suppress("UNUSED_PARAMETER") tint: Color, modifier: Modifier = Modifier,
+             hint: String? = null) {
+    Surface(modifier, shape = RoundedCornerShape(16.dp), color = Tone.current.surface,
+        border = BorderStroke(1.dp, Tone.current.divider)) {
         Column(Modifier.padding(14.dp)) {
             Label(label)
-            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text(value, style = MaterialTheme.typography.headlineSmall)
             if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall, color = Tone.current.textSecondary)
         }
     }

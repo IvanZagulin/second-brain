@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -215,15 +216,18 @@ private fun MainScaffold(container: AppContainer, pendingRoute: MutableState<Str
         Scaffold(
             containerColor = Tone.current.bg,
             bottomBar = {
-                if (TABS.any { it.route == current }) {
-                    NavigationBar(containerColor = Tone.current.surface) {
+                if (TABS.any { it.route == current }) Column {
+                    HorizontalDivider(color = Tone.current.divider)
+                    NavigationBar(containerColor = Tone.current.bg, tonalElevation = 0.dp) {
                         TABS.forEach { tab ->
                             NavigationBarItem(
                                 selected = current == tab.route,
                                 onClick = { navigateTab(nav, tab.route) },
                                 icon = { Icon(tab.icon, tab.label) },
-                                label = { Text(tab.label) },
-                                colors = NavigationBarItemDefaults.colors(indicatorColor = Tone.current.training),
+                                label = { Text(tab.label, style = MaterialTheme.typography.labelMedium) },
+                                colors = NavigationBarItemDefaults.colors(indicatorColor = Tone.current.fill,
+                                    selectedIconColor = Tone.current.text, selectedTextColor = Tone.current.text,
+                                    unselectedIconColor = Tone.current.textSecondary, unselectedTextColor = Tone.current.textSecondary),
                             )
                         }
                     }
@@ -236,6 +240,12 @@ private fun MainScaffold(container: AppContainer, pendingRoute: MutableState<Str
 }
 
 private fun navigateTab(nav: NavHostController, route: String) {
+    // Home is the start destination: navigating to it with restoreState would restore whatever tab stack was
+    // last saved against it (popUpTo("home") { saveState } maps that state to "home"), so pop back instead.
+    if (route == "home") {
+        nav.popBackStack("home", inclusive = false, saveState = true)
+        return
+    }
     nav.navigate(route) {
         popUpTo("home") { saveState = true }
         launchSingleTop = true

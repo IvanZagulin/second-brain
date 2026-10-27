@@ -49,6 +49,7 @@ import ru.secondbrain.app.ui.components.Field
 import ru.secondbrain.app.ui.components.Gap
 import ru.secondbrain.app.ui.components.LocalContainer
 import ru.secondbrain.app.ui.components.Secondary
+import ru.secondbrain.app.ui.components.Spark
 import ru.secondbrain.app.ui.components.SwitchRow
 import ru.secondbrain.app.ui.theme.Tone
 
@@ -69,6 +70,8 @@ fun OnboardingScreen(startAtSetup: Boolean, onDone: () -> Unit) {
 @Composable
 private fun Welcome(next: () -> Unit) {
     Gap(40)
+    Spark(44.dp)
+    Gap(12)
     Text("Второй мозг", style = MaterialTheme.typography.displayMedium)
     Text("Личный агент, который помнит, считает деньги, ведёт тренировки и пишет первым, когда это важно.",
         style = MaterialTheme.typography.bodyLarge, color = Tone.current.textSecondary)

@@ -2,6 +2,15 @@
 
 Versions follow [SemVer](https://semver.org/). Android `versionCode = major*10000 + minor*100 + patch`.
 
+## [1.0.1] — 2026-10-27
+
+- New look: warm ivory/charcoal palette with a single clay accent, Source Serif 4 for headings and the
+  agent's prose, neutral hairline cards, quiet chips and navigation bar; Claude-style home (greeting and
+  ask box) and chat (unboxed serif answers, rounded composer with a send button).
+- Fix: the «Главная» tab could reopen another tab instead of the home screen.
+- Agent: messages deferred by quiet hours are re-checked before sending (no more questions about a
+  transaction that was excluded overnight); no "over budget" alerts before balances are entered.
+
 ## [1.0.0] — 2026-10-27
 
 First complete release.

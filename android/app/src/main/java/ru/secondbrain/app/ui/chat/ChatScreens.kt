@@ -6,12 +6,20 @@ import android.net.Uri
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -28,6 +36,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.PushPin
@@ -46,6 +56,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -60,6 +72,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -88,6 +103,8 @@ import ru.secondbrain.app.ui.components.Markdown
 import ru.secondbrain.app.ui.components.Pill
 import ru.secondbrain.app.ui.components.Screen
 import ru.secondbrain.app.ui.components.Secondary
+import ru.secondbrain.app.ui.components.Spark
+import ru.secondbrain.app.ui.theme.AgentProse
 import ru.secondbrain.app.ui.theme.Tone
 import java.util.UUID
 
@@ -104,17 +121,22 @@ fun ConversationsScreen() {
         actions = { TextButton(onClick = { showArchived = !showArchived }) { Text(if (showArchived) "Активные" else "Архив") } },
         fab = {
             ExtendedFloatingActionButton(onClick = { scope.launch { nav("chat/${c.chat.newConversation()}") } },
-                icon = { Icon(Icons.Default.Add, null) }, text = { Text("Новый диалог") },
-                containerColor = Tone.current.accent, contentColor = Tone.current.surface)
+                icon = { Icon(Icons.Default.Add, null) }, text = { Text("Новый диалог") })
         }) {
         if (list.isEmpty()) item { EmptyState("Диалогов пока нет. Начните новый — агент помнит всё между диалогами.") }
         items(list, key = { it.id }) { conv ->
-            AppCard(tint = if (conv.kind == "agent") Tone.current.memory else Tone.current.surface, onClick = { nav("chat/${conv.id}") }) {
+            AppCard(onClick = { nav("chat/${conv.id}") }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (conv.pinned || conv.kind == "agent") Icon(Icons.Outlined.PushPin, null, Modifier.size(16.dp), tint = Tone.current.accent)
+                    when {
+                        conv.kind == "agent" -> { Spark(14.dp); Spacer(Modifier.width(8.dp)) }
+                        conv.pinned -> {
+                            Icon(Icons.Outlined.PushPin, null, Modifier.size(16.dp), tint = Tone.current.textSecondary)
+                            Spacer(Modifier.width(6.dp))
+                        }
+                    }
                     Text((if (conv.kind == "agent") "Агент пишет первым" else conv.title), style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f).padding(start = 4.dp))
-                    if (conv.mode != "auto") Pill(CHAT_MODES[conv.mode] ?: conv.mode, Tone.current.training)
+                        modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (conv.mode != "auto") Pill(CHAT_MODES[conv.mode] ?: conv.mode)
                 }
                 Secondary(relative(parseInstant(conv.lastMessageAt)))
             }
@@ -219,10 +241,11 @@ fun ChatScreen(conversationId: String) {
             TopAppBar(
                 title = {
                     Column {
-                        Text(if (conv?.kind == "agent") "Агент" else conv?.title ?: "Диалог", style = MaterialTheme.typography.titleLarge, maxLines = 1)
+                        Text(if (conv?.kind == "agent") "Агент" else conv?.title ?: "Диалог", style = MaterialTheme.typography.titleLarge,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Box {
                             Text("Режим: ${CHAT_MODES[conv?.mode ?: "auto"]}", style = MaterialTheme.typography.labelMedium,
-                                color = Tone.current.accent, modifier = Modifier.padding(top = 2.dp).then(Modifier))
+                                color = Tone.current.textSecondary, modifier = Modifier.padding(top = 2.dp))
                         }
                     }
                 },
@@ -240,17 +263,19 @@ fun ChatScreen(conversationId: String) {
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Tone.current.bg),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Tone.current.bg, scrolledContainerColor = Tone.current.bg),
             )
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState,
-                contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (visible.isEmpty() && live == null && pending.isEmpty()) item {
-                    AppCard(tint = Tone.current.memory) {
-                        Text("С чего начнём?", style = MaterialTheme.typography.titleMedium)
-                        Secondary("Спросите про деньги, тренировку, планы — или просто поговорите. Можно сменить режим сверху.")
+                    Column(Modifier.fillMaxWidth().padding(top = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Spark(36.dp)
+                        Text("С чего начнём?", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 14.dp))
+                        Secondary("Спросите про деньги, тренировку, планы — или просто поговорите. Режим меняется сверху.",
+                            modifier = Modifier.padding(top = 6.dp, start = 24.dp, end = 24.dp))
                     }
                 }
                 items(visible, key = { it.id }) { m -> Bubble(m) }
@@ -272,24 +297,40 @@ fun ChatScreen(conversationId: String) {
                     if (uploading) CircularProgressIndicator(Modifier.size(20.dp))
                 }
             }
-            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp), verticalAlignment = Alignment.Bottom) {
-                IconButton(onClick = { picker.launch("*/*") }) { Icon(Icons.Outlined.AttachFile, "Вложение") }
-                OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.weight(1f),
-                    placeholder = { Text("Сообщение") }, maxLines = 6, shape = RoundedCornerShape(24.dp),
-                    colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Tone.current.surface,
-                        focusedContainerColor = Tone.current.surface, unfocusedBorderColor = Tone.current.divider))
-                if (input.isBlank() && attachments.isEmpty()) {
-                    IconButton(onClick = {
-                        runCatching {
-                            voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
-                                .putExtra(RecognizerIntent.EXTRA_PROMPT, "Говорите"))
-                        }.onFailure { scope.launch { snackbar.showSnackbar("Распознавание речи недоступно на устройстве") } }
-                    }) { Icon(Icons.Outlined.Mic, "Голосом") }
-                } else {
-                    IconButton(onClick = { send() }, enabled = live == null || live?.done == true) {
-                        Icon(Icons.AutoMirrored.Filled.Send, "Отправить", tint = Tone.current.accent)
+            Surface(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 12.dp, end = 12.dp, bottom = 10.dp, top = 4.dp),
+                shape = RoundedCornerShape(24.dp), color = Tone.current.surface, border = BorderStroke(1.dp, Tone.current.outline),
+                shadowElevation = 1.dp) {
+                Column(Modifier.padding(start = 6.dp, end = 8.dp, top = 2.dp, bottom = 6.dp)) {
+                    TextField(value = input, onValueChange = { input = it }, modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Напишите сообщение…", color = Tone.current.textSecondary) }, maxLines = 6,
+                        textStyle = MaterialTheme.typography.bodyLarge,
+                        colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent, cursorColor = Tone.current.accent))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { picker.launch("*/*") }) {
+                            Icon(Icons.Outlined.AttachFile, "Вложение", tint = Tone.current.textSecondary)
+                        }
+                        Spacer(Modifier.weight(1f))
+                        if (input.isBlank() && attachments.isEmpty()) {
+                            IconButton(onClick = {
+                                runCatching {
+                                    voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
+                                        .putExtra(RecognizerIntent.EXTRA_PROMPT, "Говорите"))
+                                }.onFailure { scope.launch { snackbar.showSnackbar("Распознавание речи недоступно на устройстве") } }
+                            }) { Icon(Icons.Outlined.Mic, "Голосом", tint = Tone.current.textSecondary) }
+                        } else {
+                            val canSend = live == null || live?.done == true
+                            Surface(onClick = { send() }, enabled = canSend, shape = RoundedCornerShape(12.dp),
+                                color = if (canSend) Tone.current.accent else Tone.current.fill, modifier = Modifier.size(36.dp)) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Filled.ArrowUpward, "Отправить", Modifier.size(20.dp),
+                                        tint = if (canSend) Color.White else Tone.current.textSecondary)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -323,9 +364,9 @@ private fun Bubble(m: Message) {
 @Composable
 private fun UserBubble(text: String, footer: String? = null, extra: @Composable () -> Unit = {}) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        Surface(color = Tone.current.training, shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp),
-            modifier = Modifier.widthIn(max = 320.dp)) {
-            Column(Modifier.padding(14.dp)) {
+        Surface(color = Tone.current.fill, shape = RoundedCornerShape(18.dp),
+            modifier = Modifier.padding(start = 48.dp).widthIn(max = 300.dp)) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 SelectionContainer { Text(text, style = MaterialTheme.typography.bodyLarge) }
                 if (footer != null) Row(verticalAlignment = Alignment.CenterVertically) {
                     if (footer.startsWith("Отправится")) Icon(Icons.Outlined.Schedule, null, Modifier.size(12.dp), tint = Tone.current.textSecondary)
@@ -337,39 +378,38 @@ private fun UserBubble(text: String, footer: String? = null, extra: @Composable 
     }
 }
 
+/** Claude-style answer: no bubble, full-width serif prose; tools as one quiet line above. */
 @Composable
 private fun AssistantBubble(text: String, tools: List<String>, footer: String?) {
-    Column(Modifier.fillMaxWidth()) {
-        if (tools.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 4.dp)) {
-            tools.forEach { Pill("✓ $it", Tone.current.memory) }
-        }
-        Surface(color = Tone.current.surface, shape = RoundedCornerShape(22.dp, 22.dp, 22.dp, 6.dp),
-            modifier = Modifier.widthIn(max = 340.dp)) {
-            Column(Modifier.padding(14.dp)) {
-                SelectionContainer { Markdown(text) }
-                if (footer != null) Label(footer)
-            }
-        }
+    Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
+        if (tools.isNotEmpty()) ToolLine(tools)
+        SelectionContainer { Markdown(text, style = AgentProse) }
+        if (footer != null) Label(footer, Modifier.padding(top = 6.dp))
+    }
+}
+
+@Composable
+private fun ToolLine(tools: List<String>) {
+    Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Outlined.Check, null, Modifier.size(14.dp), tint = Tone.current.textSecondary)
+        Spacer(Modifier.width(6.dp))
+        Text(tools.joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = Tone.current.textSecondary)
     }
 }
 
 @Composable
 private fun AssistantLive(l: LiveTurn) {
-    Column(Modifier.fillMaxWidth()) {
-        if (l.tools.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 4.dp)) {
-            l.tools.forEach { Pill(it.second, Tone.current.memory) }
-        }
-        Surface(color = Tone.current.surface, shape = RoundedCornerShape(22.dp, 22.dp, 22.dp, 6.dp), modifier = Modifier.widthIn(max = 340.dp)) {
-            Column(Modifier.padding(14.dp)) {
-                when {
-                    l.error != null -> Text(l.error, color = Tone.current.negative)
-                    l.answer.isBlank() -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Text("  думает…", color = Tone.current.textSecondary)
-                    }
-                    else -> Markdown(l.answer)
-                }
+    Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
+        if (l.tools.isNotEmpty()) ToolLine(l.tools.map { it.second })
+        when {
+            l.error != null -> Text(l.error, color = Tone.current.negative)
+            l.answer.isBlank() -> Row(verticalAlignment = Alignment.CenterVertically) {
+                val spin by rememberInfiniteTransition(label = "spark").animateFloat(0f, 360f,
+                    infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "spin")
+                Box(Modifier.rotate(spin)) { Spark(18.dp) }
+                Text("  думает…", style = MaterialTheme.typography.bodyMedium, color = Tone.current.textSecondary)
             }
+            else -> Markdown(l.answer, style = AgentProse)
         }
     }
 }
