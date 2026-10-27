@@ -1,15 +1,16 @@
 # Changelog
 
 Versions follow [SemVer](https://semver.org/). Android `versionCode = major*10000 + minor*100 + patch`.
+Entries from 1.0.1 on are written in Russian: the app shows them to its owner in «Обновления».
 
 ## [1.0.1] — 2026-10-27
 
-- New look: warm ivory/charcoal palette with a single clay accent, Source Serif 4 for headings and the
-  agent's prose, neutral hairline cards, quiet chips and navigation bar; Claude-style home (greeting and
-  ask box) and chat (unboxed serif answers, rounded composer with a send button).
-- Fix: the «Главная» tab could reopen another tab instead of the home screen.
-- Agent: messages deferred by quiet hours are re-checked before sending (no more questions about a
-  transaction that was excluded overnight); no "over budget" alerts before balances are entered.
+- Новый дизайн в духе Claude: тёплая палитра «слоновая кость / графит» с одним терракотовым акцентом,
+  антиква Source Serif 4 для заголовков и ответов агента, спокойные карточки с тонкой рамкой.
+- Главная: приветствие и поле «Спросите…»; чат: ответы агента без пузыря, новое поле ввода.
+- Исправлено: вкладка «Главная» могла открывать другую вкладку.
+- Агент перепроверяет сообщения, отложенные на утро из-за тихих часов, и не пишет «превышен бюджет»,
+  пока не введены остатки.
 
 ## [1.0.0] — 2026-10-27
 

@@ -152,8 +152,16 @@ fun Sheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
 /** Minimal Markdown for agent answers: headings, **bold**, *italic*, `code`, bullet and numbered lists. */
 @Composable
 fun Markdown(text: String, color: Color = Tone.current.text, style: TextStyle = MaterialTheme.typography.bodyLarge) {
+    // Indented lines continue the previous item (wrapped list items in release notes and changelogs).
+    val listItem = Regex("^\\s*([-*•]|\\d+[.)]) ")
+    val lines = mutableListOf<String>()
+    text.trim().split("\n").forEach { raw ->
+        val continues = raw.startsWith("  ") && raw.isNotBlank() && !listItem.containsMatchIn(raw) &&
+            lines.lastOrNull()?.isNotBlank() == true
+        if (continues) lines[lines.lastIndex] = lines.last() + " " + raw.trim() else lines += raw
+    }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        text.trim().split("\n").forEach { raw ->
+        lines.forEach { raw ->
             val line = raw.trimEnd()
             when {
                 line.isBlank() -> Spacer(Modifier.height(2.dp))
