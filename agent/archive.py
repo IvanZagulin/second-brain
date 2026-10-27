@@ -301,7 +301,7 @@ async def analyze_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, An
         span = (rows[0].sent_at, rows[-1].sent_at)
         try:
             parsed = await call_json(
-                owner_id, "import", model=model, effort="medium", max_tokens=16000,
+                owner_id, "import", model=model, effort="medium", max_tokens=16000, cache=False,
                 system=PERIOD_SYSTEM, schema=PERIOD_SCHEMA, job_id=job_id,
                 user=f"Источник: {'«' + title + '»' if not grouped else title}. Метки: Я — владелец; {legend or 'нет'}.\n"
                      f"Уже известно о владельце:\n{format_memories(known) or '—'}\n\nПериод:\n" + "\n".join(lines))
@@ -409,7 +409,7 @@ async def build_portrait(owner_id: uuid.UUID, job_id: uuid.UUID, chronicles: lis
     async with session_scope() as db:
         user = await db.get(User, owner_id)
         name = user.name if user else None
-    parsed = await call_json(owner_id, "analysis", model=PORTRAIT_MODEL, effort="high", max_tokens=32000,
+    parsed = await call_json(owner_id, "analysis", model=PORTRAIT_MODEL, effort="high", max_tokens=32000, cache=False,
                              system=PORTRAIT_SYSTEM, schema=PORTRAIT_SCHEMA, job_id=job_id,
                              user=f"Владелец: {name or 'владелец'}. Летописей: {len(chronicles)}.\n\n{body}")
     source_ids = sorted({c["source_id"] for c in chronicles if c.get("source_id")})

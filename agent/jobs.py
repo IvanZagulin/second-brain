@@ -3,6 +3,7 @@ the follow-up runner (a small tool-using loop for jobs the agent scheduled for i
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 import json
 import logging
@@ -12,7 +13,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from agent import archive, extraction, initiative, reports, rules
 from agent.chat import system_prompt
@@ -197,6 +198,16 @@ def _snapshot(job: AgentJob) -> dict[str, Any]:
             "priority": job.priority, "tools": list(job.tools or []), "cost_limit_usd": str(job.cost_limit_usd)}
 
 
+async def _heartbeat(job_id: uuid.UUID, every: int = 300) -> None:
+    """Long jobs (an archive analysis runs for hours) touch their row so the scheduler's stuck-job recovery
+    (35 minutes without an update) does not start a second copy alongside."""
+    while True:
+        await asyncio.sleep(every)
+        async with session_scope() as db:
+            await db.execute(update(AgentJob).where(AgentJob.id == job_id, AgentJob.status == "running")
+                             .values(updated_at=utcnow()))
+
+
 async def run_job(job_id: uuid.UUID) -> dict[str, Any]:
     async with session_scope() as db:
         job = (await db.execute(select(AgentJob).where(AgentJob.id == job_id).with_for_update(skip_locked=True))
@@ -216,7 +227,11 @@ async def run_job(job_id: uuid.UUID) -> dict[str, Any]:
     try:
         if handler is None:
             raise RuntimeError(f"unknown job kind {snap['kind']}")
-        result = await handler(owner_id, snap) or {}
+        beat = asyncio.create_task(_heartbeat(job_id))
+        try:
+            result = await handler(owner_id, snap) or {}
+        finally:
+            beat.cancel()
     except BudgetExceeded as exc:
         status, error = "budget", exc.message
         retry_at = utcnow() + timedelta(hours=6)

@@ -118,13 +118,15 @@ async def call(owner_id: uuid.UUID, purpose: str, *, system: str | list, message
                model: str | None = None, effort: str | None = None, max_tokens: int = 8000,
                tools: list | None = None, json_schema: dict | None = None, priority: int = 1,
                job_id: uuid.UUID | None = None, conversation_id: uuid.UUID | None = None,
-               meta: dict | None = None) -> LlmResult:
-    """One non-interactive request (streamed under the hood for timeout safety)."""
+               meta: dict | None = None, cache: bool = True) -> LlmResult:
+    """One non-interactive request (streamed under the hood for timeout safety).
+
+    ``cache=False`` for one-off prompts (archive periods): a cache write costs 1.25x input and is never read."""
     model, effort = await resolve_route(owner_id, purpose, model, effort)
     est = estimate_usd(model, estimate_request_tokens(system, messages, tools), max_tokens)
     reservation = await budget.reserve(owner_id, purpose, est, priority)
     params = build_params(model=model, effort=effort, system=system, messages=messages,
-                          max_tokens=max_tokens, tools=tools, json_schema=json_schema)
+                          max_tokens=max_tokens, tools=tools, json_schema=json_schema, cache=cache)
     try:
         async with get_client().beta.messages.stream(**params) as stream:
             message = await stream.get_final_message()

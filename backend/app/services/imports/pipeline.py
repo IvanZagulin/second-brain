@@ -90,7 +90,7 @@ PORTRAIT_MODEL = "claude-opus-5-5"
 def estimate_cost(chars: int, chats: int, messages: int = 0, tier: str = "balanced") -> Decimal:
     """Reading: text plus the compact per-line overhead, a few thousand tokens of context per period and the
     period's facts + chronicle (+ thinking) as output. Portrait: every chronicle in, one long answer out."""
-    tokens = int((chars + messages * 4) / 2.5)
+    tokens = int((chars + messages * 4) / 2.1)  # Russian text runs ~2.1 characters per token
     periods = max(tokens // PERIOD_TOKENS[tier] + chats, 1)
     read = price_for(READ_MODELS[tier], PERIOD_TOKENS[tier])
     portrait = price_for(PORTRAIT_MODEL, 200_000)
