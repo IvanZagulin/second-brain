@@ -425,8 +425,11 @@ async def build_portrait(owner_id: uuid.UUID, job_id: uuid.UUID, chronicles: lis
                              system=PORTRAIT_SYSTEM, schema=PORTRAIT_SCHEMA, job_id=job_id,
                              user=f"Владелец: {name or 'владелец'}. Летописей: {len(chronicles)}.\n\n{body}")
     source_ids = sorted({c["source_id"] for c in chronicles if c.get("source_id")})
-    titles = sorted({c.get("title") or "" for c in chronicles})
     sid = source_ids[0] if source_ids else None
+    # Chronicle titles of grouped AI chats list dozens of conversations: name the sources instead.
+    async with session_scope() as db:
+        titles = sorted({t for t in (await db.execute(select(MemorySource.title).where(
+            MemorySource.id.in_([uuid.UUID(x) for x in source_ids])))).scalars() if t}) if source_ids else []
 
     # Conclusions become analytical memories (the agent finds them like any other memory).
     facts = [{"type": "analytical", "category": c.get("category") or "general", "content": c["content"],
@@ -461,7 +464,8 @@ async def build_portrait(owner_id: uuid.UUID, job_id: uuid.UUID, chronicles: lis
             person.version = (person.version or 0) + 1
 
         # A readable document in «Заметки»; processed so it is not fed back into memory extraction.
-        doc = [f"# Портрет по архиву: {', '.join(titles)}", "", "## Ты", parsed.get("owner_portrait") or ""]
+        doc = [f"# Портрет по архивам: {', '.join(titles[:8])}{' …' if len(titles) > 8 else ''}", "", "## Ты",
+               parsed.get("owner_portrait") or ""]
         for p in parsed.get("people") or []:
             doc += ["", f"## {p.get('name')}", p.get("portrait") or ""]
         for r in parsed.get("relationships") or []:
