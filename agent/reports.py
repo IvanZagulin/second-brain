@@ -16,7 +16,7 @@ from agent.chat import system_prompt
 from agent.initiative import consider, deliver_message
 from app.core.db import session_scope
 from app.core.money import fmt_rub
-from app.core.timeutil import RU_WEEKDAYS, local_day_bounds, local_now, tz, utcnow
+from app.core.timeutil import RU_WEEKDAYS, brief_key, day_part, local_day_bounds, local_now, parse_hhmm, tz, utcnow
 from app.models import (
     BodyMetric, BudgetCategory, Conversation, Exercise, Memory, Message, MoodEntry, Task, Transaction, User,
     WishlistItem, Workout, WorkoutPlan, WorkoutSet,
@@ -341,6 +341,7 @@ BRIEF_PROMPT = (
     "Это не сообщение в чат, а текст на главном экране приложения владельца, под приветствием. Напиши 2–3 "
     "коротких предложения на «ты», своим голосом, всего не длиннее 260 символов: только то, что сегодня "
     "главное — сколько можно потратить, тренировка, срочные платежи и задачи. О том, чего нет, не пиши. "
+    "Учитывай время суток: вечером не зови на то, что уже прошло, а коротко подведи день. "
     "Без приветствия, без списков и markdown.")
 
 
@@ -351,7 +352,7 @@ async def home_brief(owner_id: uuid.UUID) -> dict[str, Any]:
         now = local_now(user.timezone if user else None)
         summary = await finance_summary(db, owner_id)
         fit = await get_setting(db, owner_id, "fitness")
-        _, end = local_day_bounds(now.date(), user.timezone if user else None)
+        start, end = local_day_bounds(now.date(), user.timezone if user else None)
         tasks = (await db.execute(select(Task).where(Task.owner_id == owner_id, Task.status == "open",
                                                      Task.deleted_at.is_(None), Task.due_at < end)
                                   .order_by(Task.due_at).limit(5))).scalars().all()
@@ -360,13 +361,24 @@ async def home_brief(owner_id: uuid.UUID) -> dict[str, Any]:
             plan = (await db.execute(select(WorkoutPlan).where(
                 WorkoutPlan.owner_id == owner_id, WorkoutPlan.weekday == now.isoweekday(),
                 WorkoutPlan.deleted_at.is_(None)))).scalars().first()
+        last = (await db.execute(select(Workout).where(Workout.owner_id == owner_id, Workout.status == "done",
+                                                       Workout.deleted_at.is_(None))
+                                 .order_by(Workout.started_at.desc()).limit(1))).scalar_one_or_none()
         system = await system_prompt(db, owner_id)
+    at = fit.get("training_time")
+    if last and last.started_at >= start:
+        workout = "уже сделана"
+    elif plan:
+        workout = f"{plan.name} в {at or 'обычное время'}" + (
+            ", время уже прошло, отметки нет" if at and now.time() > parse_hhmm(at) else "")
+    else:
+        workout = "нет"
     obligations = [o for o in summary["upcoming_30d"] if o["due"] <= (now.date() + timedelta(days=3)).isoformat()]
-    facts = (f"Сейчас {RU_WEEKDAYS[now.weekday()]} {now:%H:%M}.\n"
+    facts = (f"Сейчас {RU_WEEKDAYS[now.weekday()]} {now:%H:%M}, {day_part(now)}.\n"
              f"Можно потратить сегодня {fmt_rub(summary['today_left_minor'])} (бюджет на день "
              f"{fmt_rub(summary['daily_budget_minor'])}), свободно {fmt_rub(summary['free_minor'])}, до поступления "
              f"{summary['days_until_income']} дн." + (" Остатки оценочные." if summary["estimated"] else "") + "\n"
-             f"Тренировка сегодня: {(plan.name + ' в ' + (fit.get('training_time') or '')) if plan else 'нет'}.\n"
+             f"Тренировка сегодня: {workout}.\n"
              f"Задачи на сегодня и просроченные: {'; '.join(t.title for t in tasks) or 'нет'}.\n"
              f"Платежи в ближайшие 3 дня: {'; '.join(o['title'] + ' ' + fmt_rub(o['amount_minor']) for o in obligations) or 'нет'}.")
     result = await call(owner_id, "background", system=system, max_tokens=600,
@@ -374,6 +386,6 @@ async def home_brief(owner_id: uuid.UUID) -> dict[str, Any]:
     text = result.text.strip()
     async with session_scope() as db:
         await set_setting(db, owner_id, "home_brief", {"text": text, "at": utcnow().isoformat(),
-                                                       "date": now.date().isoformat()}, merge=False)
+                                                       "key": brief_key(now, last.id if last else None)}, merge=False)
     return {"ok": True}
 

@@ -59,3 +59,12 @@ RU_MONTHS_GEN = ["января", "февраля", "марта", "апреля",
 
 def ru_date(d: date | datetime) -> str:
     return f"{d.day} {RU_MONTHS_GEN[d.month - 1]} {d.year}"
+
+
+def day_part(now_local: datetime) -> str:
+    return "утро" if now_local.hour < 12 else "день" if now_local.hour < 18 else "вечер"
+
+
+def brief_key(now_local: datetime, last_workout_id: object | None) -> str:
+    """When the home brief is due again: a new part of the day or a newly finished workout."""
+    return f"{now_local.date().isoformat()}:{day_part(now_local)}:{last_workout_id or '-'}"

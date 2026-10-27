@@ -14,7 +14,7 @@ from app.core.db import get_db
 from app.core.deps import Auth, get_auth
 from app.core.errors import NotFound
 from app.core.money import fmt_rub
-from app.core.timeutil import local_day_bounds, local_now, utcnow
+from app.core.timeutil import brief_key, local_day_bounds, local_now, utcnow
 from app.models import (
     ApiUsage, ClarifyingQuestion, Conversation, Experiment, Habit, HabitLog, LifeEvent, Message, MoodEntry, Note, Notification, Task,
     Workout, WorkoutPlan,
@@ -177,11 +177,12 @@ async def home(auth: Auth = Depends(get_auth), db: AsyncSession = Depends(get_db
                                      .order_by(Workout.started_at.desc()).limit(1))).scalar_one_or_none()
     usage = await usage_summary(db, auth.owner_id)
     brief = await get_setting(db, auth.owner_id, "home_brief")
-    fresh = bool(brief) and brief.get("date") == now.date().isoformat() and \
+    key = brief_key(now, last_workout.id if last_workout else None)
+    fresh = bool(brief) and brief.get("key") == key and \
         (utcnow() - datetime.fromisoformat(brief["at"])) < timedelta(hours=3)
     if not fresh:
         await enqueue("run_system_task", "home_brief", str(auth.owner_id),
-                      job_id=f"home_brief:{auth.owner_id}:{now:%Y%m%d%H}")
+                      job_id=f"home_brief:{auth.owner_id}:{now:%Y%m%d%H}:{key}")
     question = (await db.execute(select(ClarifyingQuestion).where(
         ClarifyingQuestion.owner_id == auth.owner_id, ClarifyingQuestion.status == "open")
         .order_by(ClarifyingQuestion.priority.desc(), ClarifyingQuestion.created_at.desc()).limit(1))).scalar_one_or_none()
