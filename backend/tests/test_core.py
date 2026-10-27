@@ -259,3 +259,22 @@ def test_telegram_html_and_claude_memory_imports(tmp_path):
     notes = list(chat.messages)
     assert [n.external_id for n in notes] == ["profile.md", "topics/pets.md"]
     assert notes[0].text.startswith("[Заметка памяти Claude: profile.md]") and notes[0].is_self is False
+
+
+def test_archive_compact_format_and_estimate():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from agent.archive import format_lines, speaker_labels
+    from app.services.imports.pipeline import estimate_cost
+
+    labels = speaker_labels([{"id": "name:Дарья", "name": "Дарья"}, {"id": "name:Денис", "name": "Денис"}])
+    assert labels == {"name:Дарья": "Д", "name:Денис": "Д2"}
+    t = lambda h, m: datetime(2021, 3, 29, h, m, tzinfo=timezone.utc)
+    rows = [SimpleNamespace(sent_at=t(9, 53), is_self=False, author_id="name:Дарья", author="Дарья", text="привет"),
+            SimpleNamespace(sent_at=t(9, 53), is_self=True, author_id="name:Иван", author="Иван", text="как\nты"),
+            SimpleNamespace(sent_at=t(9, 55), is_self=False, author_id="name:Денис", author="Денис", text="ок")]
+    assert format_lines(rows, labels, "Europe/Moscow") == [
+        "== 29.03.2021, пн ==", "1 12:53 Д: привет", "2 Я: как / ты", "3 12:55 Д2: ок"]
+    economy, balanced = estimate_cost(13_800_000, 1, 590_000, "economy"), estimate_cost(13_800_000, 1, 590_000)
+    assert economy < balanced and 10 < balanced < 40

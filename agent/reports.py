@@ -252,10 +252,14 @@ async def refresh_profile_summary(owner_id: uuid.UUID) -> dict[str, Any]:
     if len(mems) < 3:
         return {"skip": "too few memories"}
     text = "\n".join(f"- [{m.category}] {m.content}" for m in mems)
+    async with session_scope() as db:
+        portrait = await get_setting(db, owner_id, "portrait_profile")
+    # The portrait written from whole archives is the backbone; new facts refine it, they don't replace it.
+    base = f"Портрет по архивам (сохрани его суть, уточни новыми фактами):\n{portrait}\n\n" if portrait else ""
     result = await call(owner_id, "background", system="Ты составляешь сжатый профиль человека для его личного ИИ-агента.",
-                        messages=[{"role": "user", "content": "Сожми эти факты в профиль до 220 слов: кто он, работа, "
+                        messages=[{"role": "user", "content": f"{base}Сожми это в профиль до 220 слов: кто он, работа, "
                                    "цели, важные люди, привычки и слабые места, что важно помнить в разговоре. "
-                                   f"Без выдумок.\n\n{text}"}], max_tokens=2000)
+                                   f"Без выдумок.\n\nФакты:\n{text}"}], max_tokens=2000)
     async with session_scope() as db:
         await set_setting(db, owner_id, "profile_summary", result.text.strip(), merge=False)
     return {"ok": True}

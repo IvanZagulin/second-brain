@@ -107,6 +107,8 @@ async def set_self(job_id: uuid.UUID, body: SelfIn, auth: Auth = Depends(get_aut
 
 class AnalyzeIn(BaseModel):
     allow_llm: bool = True
+    # economy: Haiku reads, balanced: Sonnet reads, max: Opus reads; the portrait is always written by Opus.
+    tier: str = "balanced"
 
 
 @router.post("/{job_id}/analyze")
@@ -117,7 +119,10 @@ async def analyze(job_id: uuid.UUID, body: AnalyzeIn, auth: Auth = Depends(get_a
         raise ApiError(f"Импорт в состоянии {j.status}", code="bad_state")
     if not body.allow_llm:
         raise ApiError("Для анализа нужно разрешение отправлять фрагменты в Claude API", code="llm_not_allowed")
+    if body.tier not in ("economy", "balanced", "max"):
+        raise ApiError("Неизвестный вариант анализа", code="bad_tier")
     j.status, j.error = "analyzing", None
+    j.options = {**(j.options or {}), "tier": body.tier}
     db.add(AgentJob(owner_id=auth.owner_id, kind="import_analyze", goal=f"Анализ импорта {j.file_name}",
                     payload={"import_job_id": str(job_id)}, next_run_at=utcnow(), priority=2, max_attempts=3))
     await audit(db, auth.owner_id, auth.actor, "allow_import_llm", "import_jobs", job_id)

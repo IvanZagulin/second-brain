@@ -23,7 +23,6 @@ from app.services.llm.pricing import price_for
 log = logging.getLogger(__name__)
 
 BATCH = 1000
-CHUNK_TOKENS = 15_000
 
 
 async def parse_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, Any]:
@@ -63,12 +62,12 @@ async def parse_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, Any]
             async with session_scope() as db:
                 j = await db.get(ImportJob, job_id)
                 j.stats = {**(j.stats or {}), "progress_chats": totals["chats"]}
-        estimate = estimate_cost(totals["chars"], len(chat_stats))
+        estimates = {t: float(estimate_cost(totals["chars"], len(chat_stats), totals["messages"], t)) for t in READ_MODELS}
         async with session_scope() as db:
             j = await db.get(ImportJob, job_id)
             j.kind = kind
             j.status = "parsed"
-            j.stats = {**totals, "self_id": info.get("self_id"), "estimate_usd": float(estimate),
+            j.stats = {**totals, "self_id": info.get("self_id"), "estimate_usd": estimates["balanced"], "estimates": estimates,
                        "chats_detail": sorted(chat_stats, key=lambda c: -c["messages"])[:300]}
             j.progress = 0.0
         return {"ok": True, "kind": kind, **totals}
@@ -80,14 +79,22 @@ async def parse_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, Any]
         return {"ok": False, "error": str(exc)}
 
 
-def estimate_cost(chars: int, chats: int, model: str = "claude-haiku-5-5") -> Decimal:
-    tokens = int(chars / 2.5)
-    chunks = max(tokens // CHUNK_TOKENS + chats, 1)
-    overhead = chunks * 2500  # system prompt + known memories per chunk
-    p = price_for(model, CHUNK_TOKENS)
-    input_cost = Decimal(tokens + overhead) * p.input / 1_000_000
-    output_cost = Decimal(chunks * 1500) * p.output / 1_000_000
-    return (input_cost + output_cost).quantize(Decimal("0.0001"))
+# Mirrors agent.archive: which model reads each period, how big a period is; the portrait is always Opus.
+READ_MODELS = {"economy": "claude-haiku-5-5", "balanced": "claude-sonnet-5-5", "max": "claude-opus-5-5"}
+PERIOD_TOKENS = {"economy": 80_000, "balanced": 110_000, "max": 110_000}
+PORTRAIT_MODEL = "claude-opus-5-5"
+
+
+def estimate_cost(chars: int, chats: int, messages: int = 0, tier: str = "balanced") -> Decimal:
+    """Reading: text plus the compact per-line overhead, a few thousand tokens of context per period and the
+    period's facts + chronicle (+ thinking) as output. Portrait: every chronicle in, one long answer out."""
+    tokens = int((chars + messages * 4) / 2.5)
+    periods = max(tokens // PERIOD_TOKENS[tier] + chats, 1)
+    read = price_for(READ_MODELS[tier], PERIOD_TOKENS[tier])
+    portrait = price_for(PORTRAIT_MODEL, 200_000)
+    cost = (Decimal(tokens + periods * 3500) * read.input + Decimal(periods * 7000) * read.output
+            + Decimal(periods * 1800 + 5000) * portrait.input + Decimal(30_000) * portrait.output) / 1_000_000
+    return cost.quantize(Decimal("0.01"))
 
 
 async def _store_chat(owner_id: uuid.UUID, job_id: uuid.UUID, chat: adapters.ParsedChat,
