@@ -19,18 +19,13 @@ class ChatRepository(
     private val store: RecordStore,
     private val sync: SyncManager,
 ) {
-    /** Creates the conversation on the server, or locally when offline (pushed on the next sync). */
-    suspend fun newConversation(mode: String = "auto", title: String = "Новый диалог"): String {
-        val id = UUID.randomUUID().toString()
-        return try {
-            val created = api.post("/api/v1/chat/conversations", jsonOf("id" to id, "title" to title, "mode" to mode))
-            store.putFromServer(E.CONVERSATIONS, created)
-            id
-        } catch (e: Exception) {
-            store.save(E.CONVERSATIONS, jsonOf("title" to title, "mode" to mode, "kind" to "chat",
-                "last_message_at" to nowIso()), id)
-        }
-    }
+    /**
+     * Opens instantly: the conversation is created locally and pushed by the next sync; if the first message
+     * gets there sooner, the server creates the conversation from it. Never waits on the network.
+     */
+    suspend fun newConversation(mode: String = "auto", title: String = "Новый диалог"): String =
+        store.save(E.CONVERSATIONS, jsonOf("title" to title, "mode" to mode, "kind" to "chat",
+            "last_message_at" to nowIso()), UUID.randomUUID().toString())
 
     /** Streams an answer. The caller shows deltas; the final messages arrive through sync. */
     fun send(conversationId: String, text: String, attachmentIds: List<String>, mode: String?,

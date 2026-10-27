@@ -2,6 +2,7 @@ package ru.secondbrain.app.update
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
@@ -13,6 +14,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -35,11 +38,30 @@ data class Release(val version: String, val notes: String, val apkUrl: String, v
 
 /**
  * In-app updates from GitHub Releases: check → download APK → verify SHA-256 → hand to the system
- * installer. Android always asks the owner to confirm installation.
+ * installer. Android always asks the owner to confirm installation. The app checks when it opens and in
+ * the background; on Wi-Fi the new version is fetched ahead, so "Установить" starts the installer at once.
  */
 class UpdateManager(private val context: Context, private val api: ApiClient, private val prefs: Prefs) {
 
-    suspend fun latest(): Release? = withContext(Dispatchers.IO) {
+    private val dir get() = File(context.cacheDir, "updates")
+
+    /** A release newer than the installed version, once a check has seen one (drives the home banner). */
+    private val _available = MutableStateFlow<Release?>(null)
+    val available: StateFlow<Release?> = _available
+
+    @Volatile private var checkedAt = 0L
+
+    /** Called when the app opens: at most one check per half hour per process. */
+    suspend fun checkIfStale() {
+        val now = System.currentTimeMillis()
+        if (now - checkedAt < 30 * 60_000L) return
+        checkedAt = now
+        runCatching { latest() }
+    }
+
+    suspend fun latest(): Release? = fetchLatest()?.also { r -> _available.value = r.takeIf { isNewer(it.version) } }
+
+    private suspend fun fetchLatest(): Release? = withContext(Dispatchers.IO) {
         val direct = runCatching {
             val req = Request.Builder().url("https://api.github.com/repos/${BuildConfig.GITHUB_REPO}/releases/latest")
                 .header("Accept", "application/vnd.github+json").build()
@@ -88,10 +110,23 @@ class UpdateManager(private val context: Context, private val api: ApiClient, pr
         return 0
     }
 
+    private fun apkFile(release: Release) = File(dir, "second-brain-${release.version}.apk")
+    private fun okFile(release: Release) = File(dir, apkFile(release).name + ".ok")
+
+    /** The APK for [release] if it is already downloaded and verified. */
+    fun ready(release: Release): File? = apkFile(release).takeIf {
+        it.exists() && okFile(release).exists() && (release.apkSize <= 0 || it.length() == release.apkSize)
+    }
+
+    /** Background download (Wi-Fi only by the caller); null on any failure — the owner can still tap to download. */
+    suspend fun prefetch(release: Release): File? = runCatching { download(release) {} }
+        .onFailure { AppLog.w("update", "prefetch failed: ${it.message}") }.getOrNull()
+
     suspend fun download(release: Release, onProgress: (Float) -> Unit): File = withContext(Dispatchers.IO) {
-        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
-        val file = File(dir, "second-brain-${release.version}.apk")
+        ready(release)?.let { onProgress(1f); return@withContext it }
+        dir.mkdirs()
+        dir.listFiles()?.forEach { it.delete() }  // older downloads in the app's own cache
+        val file = apkFile(release)
         api.downloadTo(release.apkUrl, file) { done, total -> if (total > 0) onProgress(done.toFloat() / total) }
         release.shaUrl?.let { url ->
             val shaFile = File(dir, "apk.sha256")
@@ -103,6 +138,7 @@ class UpdateManager(private val context: Context, private val api: ApiClient, pr
                 throw SecurityException("Контрольная сумма не совпала — файл повреждён или подменён")
             }
         }
+        okFile(release).writeText(sha256(file))
         AppLog.i("update", "downloaded ${release.version}")
         file
     }
@@ -137,9 +173,11 @@ class UpdateManager(private val context: Context, private val api: ApiClient, pr
 
     companion object {
         fun schedule(context: Context) {
-            val req = PeriodicWorkRequestBuilder<UpdateCheckWorker>(12, TimeUnit.HOURS)
+            val req = PeriodicWorkRequestBuilder<UpdateCheckWorker>(6, TimeUnit.HOURS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork("update-check", ExistingPeriodicWorkPolicy.KEEP, req)
+            val wm = WorkManager.getInstance(context)
+            wm.cancelUniqueWork("update-check")  // 1.0.0–1.0.1 checked every 12 h under this name
+            wm.enqueueUniquePeriodicWork("update-check-6h", ExistingPeriodicWorkPolicy.KEEP, req)
         }
     }
 }
@@ -149,9 +187,17 @@ class UpdateCheckWorker(context: Context, params: WorkerParameters) : CoroutineW
         val c = (applicationContext as SecondBrainApp).container
         if (!c.prefs.isPaired()) return Result.success()  // the release feed is served by our server and needs a token
         val rel = runCatching { c.updates.latest() }.getOrNull() ?: return Result.success()
-        if (c.updates.isNewer(rel.version)) {
-            c.notifier.simple(7001, "Доступно обновление ${rel.version}", "Откройте «Обновления», чтобы установить.")
-        }
+        if (!c.updates.isNewer(rel.version)) return Result.success()
+        // 27 MB: fetch ahead only on an unmetered network; on mobile data the owner decides.
+        val metered = applicationContext.getSystemService(ConnectivityManager::class.java).isActiveNetworkMetered
+        val apk = c.updates.ready(rel) ?: if (!metered) c.updates.prefetch(rel) else null
+        val state = "${rel.version}:${if (apk != null) "ready" else "available"}"
+        if (c.prefs.get(Prefs.Keys.updateNotified) == state) return Result.success()  // one notice per version/state
+        c.prefs.set(Prefs.Keys.updateNotified, state)
+        if (apk != null) c.notifier.simple(7001, "Обновление ${rel.version} готово",
+            "Нажмите, чтобы установить: файл уже скачан и проверен.", route = "updates")
+        else c.notifier.simple(7001, "Доступно обновление ${rel.version}", "Нажмите, чтобы скачать и установить.",
+            route = "updates")
         return Result.success()
     }
 }

@@ -138,11 +138,17 @@ class AgentNotifier(private val context: Context, private val db: AppDatabase) {
             PendingIntent.FLAG_UPDATE_CURRENT or mutable)
     }
 
-    fun simple(id: Int, title: String, body: String, channel: String = CH_SYSTEM) {
+    /** A local notification; tapping it opens the app, on [route] when given. */
+    fun simple(id: Int, title: String, body: String, channel: String = CH_SYSTEM, route: String? = null) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val open = PendingIntent.getActivity(context, id,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                route?.let { putExtra(EXTRA_ROUTE, it) }
+            }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         NotificationManagerCompat.from(context).notify(id, NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_notification).setContentTitle(title).setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setAutoCancel(true).build())
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setContentIntent(open).setAutoCancel(true).build())
     }
 
     companion object {

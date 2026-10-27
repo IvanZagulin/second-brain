@@ -38,6 +38,7 @@ class Prefs(private val context: Context) {
         val notificationPackages = stringPreferencesKey("notification_packages")
         val onboardingDone = booleanPreferencesKey("onboarding_done")
         val lastUpdateCheck = longPreferencesKey("last_update_check")
+        val updateNotified = stringPreferencesKey("update_notified")
         val healthEnabled = booleanPreferencesKey("health_enabled")
         val usageEnabled = booleanPreferencesKey("usage_enabled")
         val lastHealthSync = longPreferencesKey("last_health_sync")

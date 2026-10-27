@@ -539,7 +539,13 @@ fun UpdatesScreen() {
                                     c.updates.install(apk)
                                 } catch (e: Exception) { progress = -1f; error = e.message }
                             }
-                        }) { Text(if (progress >= 0f) "Скачиваю…" else "Скачать и установить") }
+                        }) {
+                            Text(when {
+                                progress >= 0f -> "Скачиваю…"
+                                c.updates.ready(r) != null -> "Установить"
+                                else -> "Скачать и установить"
+                            })
+                        }
                         Secondary("Файл проверяется по контрольной сумме. Android попросит подтвердить установку; данные приложения сохранятся.")
                     }
                 }

@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -18,6 +20,7 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -40,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -82,6 +86,7 @@ import ru.secondbrain.app.ui.fitness.NutritionScreen
 import ru.secondbrain.app.ui.fitness.PhotosScreen
 import ru.secondbrain.app.ui.fitness.PlanScreen
 import ru.secondbrain.app.ui.fitness.WorkoutScreen
+import ru.secondbrain.app.ui.help.HelpScreen
 import ru.secondbrain.app.ui.home.HomeScreen
 import ru.secondbrain.app.ui.home.MoreScreen
 import ru.secondbrain.app.ui.memory.ImportDetailScreen
@@ -203,6 +208,7 @@ private fun MainScaffold(container: AppContainer, pendingRoute: MutableState<Str
     LaunchedEffect(Unit) {
         container.refreshLocalSettings()
         container.sync.requestSync(0)
+        container.updates.checkIfStale()
         container.initPush()
     }
     LaunchedEffect(pendingRoute.value) {
@@ -224,7 +230,13 @@ private fun MainScaffold(container: AppContainer, pendingRoute: MutableState<Str
                                 selected = current == tab.route,
                                 onClick = { navigateTab(nav, tab.route) },
                                 icon = { Icon(tab.icon, tab.label) },
-                                label = { Text(tab.label, style = MaterialTheme.typography.labelMedium) },
+                                // One line always: on narrow phones or with a large system font "Тренировки" used to
+                                // wrap its last letter; shrink a little instead.
+                                label = {
+                                    BasicText(tab.label, maxLines = 1, softWrap = false,
+                                        style = MaterialTheme.typography.labelMedium.copy(color = LocalContentColor.current),
+                                        autoSize = TextAutoSize.StepBased(minFontSize = 9.sp, maxFontSize = 12.sp, stepSize = 0.5.sp))
+                                },
                                 colors = NavigationBarItemDefaults.colors(indicatorColor = Tone.current.fill,
                                     selectedIconColor = Tone.current.text, selectedTextColor = Tone.current.text,
                                     unselectedIconColor = Tone.current.textSecondary, unselectedTextColor = Tone.current.textSecondary),
@@ -307,6 +319,7 @@ private fun Routes(nav: NavHostController) {
         composable("settings/integrations") { IntegrationsScreen() }
         composable("settings/devices") { DevicesScreen() }
         composable("updates") { UpdatesScreen() }
+        composable("help") { HelpScreen() }
         composable("diagnostics") { DiagnosticsScreen() }
     }
 }

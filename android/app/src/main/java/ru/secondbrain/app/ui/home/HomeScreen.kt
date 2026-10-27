@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.EditNote
@@ -45,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -94,6 +97,7 @@ val HOME_CARDS = linkedMapOf(
     "budget" to "Расходы на Claude API",
 )
 val HomeCardsKey = stringPreferencesKey("home_cards")
+val HelpDismissedKey = booleanPreferencesKey("help_dismissed")
 
 @Composable
 fun HomeScreen() {
@@ -106,6 +110,8 @@ fun HomeScreen() {
     val home = cached?.let { runCatching { PlainJson.parseToJsonElement(it).jsonObject }.getOrNull() }
     val tasks by c.store.observe(E.TASKS, Task.serializer()).collectAsState(initial = emptyList())
     var moodOpen by remember { mutableStateOf(false) }
+    val update by c.updates.available.collectAsState()
+    val helpDismissed by c.prefs.flow(HelpDismissedKey).collectAsState(initial = true)
     LaunchedEffect(Unit) { c.sync.refreshHome() }
 
     Screen(title = "", back = false, onRefresh = { c.sync.syncNow() },
@@ -124,7 +130,39 @@ fun HomeScreen() {
             }
         }
 
+        update?.let { u ->
+            item {
+                AppCard(onClick = { nav("updates") }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.SystemUpdate, null, tint = Tone.current.accent)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Доступна версия ${u.version}", style = MaterialTheme.typography.titleMedium)
+                            Secondary(if (c.updates.ready(u) != null) "Уже скачана — установка в одно касание" else "Нажмите, чтобы обновить")
+                        }
+                        Text("Обновить", style = MaterialTheme.typography.labelLarge, color = Tone.current.accent)
+                    }
+                }
+            }
+        }
+
         item { AskBox { scope.launch { nav("chat/${c.chat.newConversation()}") } } }
+
+        if (helpDismissed != true) item {
+            AppCard(onClick = { nav("help") }) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.AutoMirrored.Outlined.HelpOutline, null, tint = Tone.current.accent)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Как пользоваться", style = MaterialTheme.typography.titleMedium)
+                        Secondary("Что умеет агент, что он помнит и где хранятся данные — 2 минуты")
+                    }
+                    IconButton(onClick = { scope.launch { c.prefs.set(HelpDismissedKey, true) } }) {
+                        Icon(Icons.Outlined.Close, "Скрыть", tint = Tone.current.textSecondary)
+                    }
+                }
+            }
+        }
 
         val obs = home?.get("observation") as? JsonObject
         if ("observation" in cards && obs != null) item {
@@ -254,6 +292,7 @@ private fun AskBox(onOpen: () -> Unit) {
 @Composable
 private fun SectionsGrid(nav: (String) -> Unit) {
     val items = listOf(
+        Triple("Как пользоваться", Icons.AutoMirrored.Outlined.HelpOutline, "help"),
         Triple("Задачи и цели", Icons.AutoMirrored.Outlined.ListAlt, "tasks"),
         Triple("Привычки", Icons.Outlined.Loop, "habits"),
         Triple("Эксперименты", Icons.Outlined.Science, "experiments"),
