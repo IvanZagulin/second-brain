@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -42,6 +43,8 @@ PORTRAIT_MODEL = "claude-opus-5-5"
 # Haiku is billed at a higher tier above 100k prompt tokens, so its periods stay below that.
 PERIOD_TOKENS = {"economy": 80_000, "balanced": 110_000, "max": 110_000}
 WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+# The worker kills a job after 30 minutes; a big archive is read in slices that re-queue themselves.
+SLICE_SECONDS = 20 * 60
 # In chats with AI assistants the owner's words carry the portrait; the assistant's replies are context only.
 ASSISTANT_IDS = {"assistant", "model"}
 ASSISTANT_REPLY_CHARS = 600
@@ -268,6 +271,7 @@ async def analyze_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, An
         job.status = "analyzing"
         tier = (job.options or {}).get("tier") or "balanced"
         want_portrait = (job.options or {}).get("portrait", True)
+        prev_stats = (job.stats or {}).get("analysis") or {}
         user = await db.get(User, owner_id)
         tz_name = user.timezone if user else "Europe/Moscow"
         chats = (await db.execute(select(ImportChat).join(MemorySource, MemorySource.id == ImportChat.source_id).where(
@@ -282,6 +286,10 @@ async def analyze_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, An
     model = READ_MODELS.get(tier, READ_MODELS["balanced"])
     budget = PERIOD_TOKENS.get(tier, 110_000)
     stats = {"facts": 0, "people": 0, "events": 0, "questions": 0, "chunks": 0, "tier": tier, "model": model}
+    if prev_stats.get("model") == model:  # continuing a slice: keep counting from where it stopped
+        for k in ("facts", "people", "events", "questions", "chunks"):
+            stats[k] = int(prev_stats.get(k) or 0)
+    started = time.monotonic()
     log_path = chronicles_path(job_id)
 
     titles = {c.id: c.title for c in chats}
@@ -350,12 +358,16 @@ async def analyze_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, An
         async for rows in _periods(c.id, c.analyzed_upto_id, budget):
             if (stop := await read(rows, labels, legend, grouped=False)):
                 return {stop: True, **stats}
+            if time.monotonic() - started > SLICE_SECONDS:
+                return {"continue": True, **stats}
     if grouped:
         merged = {p.get("id"): p for c in grouped for p in (c.participants or []) if p.get("id")}
         labels, legend = legend_for(list(merged.values()))
         async for rows in _grouped_periods(grouped, budget):
             if (stop := await read(rows, labels, legend, grouped=True)):
                 return {stop: True, **stats}
+            if time.monotonic() - started > SLICE_SECONDS:
+                return {"continue": True, **stats}
 
     portrait_ok = False
     # The portrait covers every analysed archive, not just this one: earlier imports' chronicles join in.
