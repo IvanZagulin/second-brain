@@ -69,6 +69,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -117,7 +118,7 @@ fun ConversationsScreen() {
     var showArchived by remember { mutableStateOf(false) }
     val list = convs.filter { it.archived == showArchived }
         .sortedWith(compareByDescending<Conversation> { it.pinned || it.kind == "agent" }.thenByDescending { it.lastMessageAt ?: "" })
-    Screen("Чат", back = false, onRefresh = { c.sync.syncNow() },
+    Screen("Диалоги", onRefresh = { c.sync.syncNow() },
         actions = { TextButton(onClick = { showArchived = !showArchived }) { Text(if (showArchived) "Активные" else "Архив") } },
         fab = {
             ExtendedFloatingActionButton(onClick = { scope.launch { nav("chat/${c.chat.newConversation()}") } },
@@ -147,8 +148,9 @@ fun ConversationsScreen() {
 private data class LiveTurn(val userText: String, val answer: String = "", val tools: List<Pair<String, String>> = emptyList(),
                             val error: String? = null, val done: Boolean = false)
 
+/** ``initial``: a question asked from the home screen, sent as soon as the conversation opens. */
 @Composable
-fun ChatScreen(conversationId: String) {
+fun ChatScreen(conversationId: String, initial: String? = null) {
     val c = LocalContainer.current
     val back = LocalBack.current
     val context = LocalContext.current
@@ -210,8 +212,6 @@ fun ChatScreen(conversationId: String) {
         live = LiveTurn(text)
         val clientId = UUID.randomUUID().toString()
         scope.launch {
-            // A conversation created offline must reach the server before its first message.
-            if (c.store.isDirty(E.CONVERSATIONS, conversationId)) runCatching { c.sync.syncNow() }
             c.chat.send(conversationId, text, ids, null, clientId).collect { ev ->
                 live = when (ev) {
                     is ChatEvent.Delta -> live?.copy(answer = (live?.answer ?: "") + ev.text)
@@ -234,6 +234,14 @@ fun ChatScreen(conversationId: String) {
         }
     }
 
+    var initialSent by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(initial) {
+        if (initial != null && !initialSent) {
+            initialSent = true
+            input = initial
+            send()
+        }
+    }
     Scaffold(
         containerColor = Tone.current.bg,
         snackbarHost = { SnackbarHost(snackbar) },

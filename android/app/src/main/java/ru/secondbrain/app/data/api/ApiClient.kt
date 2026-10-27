@@ -43,6 +43,7 @@ val PlainJson = Json { ignoreUnknownKeys = true; explicitNulls = false; isLenien
 
 class ApiException(val status: Int, val code: String, override val message: String) : IOException(message) {
     val isAuth get() = status == 401
+    val isRevoked get() = status == 401 && code == "device_revoked"
     val isOffline get() = status == 0
 }
 

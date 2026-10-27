@@ -54,13 +54,14 @@ import ru.secondbrain.app.ui.components.SwitchRow
 import ru.secondbrain.app.ui.theme.Tone
 
 @Composable
-fun OnboardingScreen(startAtSetup: Boolean, onDone: () -> Unit) {
-    var step by remember { mutableStateOf(if (startAtSetup) 2 else 0) }
+fun OnboardingScreen(startAtSetup: Boolean, pairingOnly: Boolean = false, onDone: () -> Unit) {
+    // pairingOnly: a set-up phone whose device was revoked only needs a new code.
+    var step by remember { mutableStateOf(if (pairingOnly) 1 else if (startAtSetup) 2 else 0) }
     Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         when (step) {
             0 -> Welcome { step = 1 }
-            1 -> Pairing { step = 2 }
+            1 -> Pairing { if (pairingOnly) onDone() else step = 2 }
             2 -> Balances { step = 3 }
             else -> Permissions(onDone)
         }

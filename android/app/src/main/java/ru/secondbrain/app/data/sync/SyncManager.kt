@@ -79,6 +79,8 @@ class SyncManager(
                 true
             } catch (e: ApiException) {
                 if (e.isAuth) AppLog.w("sync", "device token rejected")
+                // Revoked from another device: back to pairing instead of showing stale data forever.
+                if (e.isRevoked) prefs.saveToken(null, null)
                 _state.value = _state.value.copy(running = false, error = e.message, offline = e.isOffline)
                 false
             } catch (e: Exception) {

@@ -165,8 +165,12 @@ fun Markdown(text: String, color: Color = Tone.current.text, style: TextStyle = 
             val line = raw.trimEnd()
             when {
                 line.isBlank() -> Spacer(Modifier.height(2.dp))
-                line.startsWith("#") -> Text(inline(line.trimStart('#').trim()), color = color,
-                    style = style.copy(fontWeight = FontWeight.SemiBold))
+                line.startsWith("#") -> {
+                    // # and ## read as section titles in the serif display face, ### and deeper as bold lines.
+                    val level = line.takeWhile { it == '#' }.length
+                    Text(inline(line.trimStart('#').trim()), color = color, modifier = Modifier.padding(top = if (level <= 2) 10.dp else 4.dp),
+                        style = if (level <= 2) MaterialTheme.typography.headlineSmall else style.copy(fontWeight = FontWeight.SemiBold))
+                }
                 line.trimStart().startsWith("- ") || line.trimStart().startsWith("* ") || line.trimStart().startsWith("• ") ->
                     Row {
                         Text("•  ", style = style, color = Tone.current.textSecondary)

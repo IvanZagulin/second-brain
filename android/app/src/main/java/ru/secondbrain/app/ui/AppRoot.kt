@@ -12,11 +12,9 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.FitnessCenter
-import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,6 +48,8 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -89,6 +89,7 @@ import ru.secondbrain.app.ui.fitness.WorkoutScreen
 import ru.secondbrain.app.ui.help.HelpScreen
 import ru.secondbrain.app.ui.home.HomeScreen
 import ru.secondbrain.app.ui.home.MoreScreen
+import ru.secondbrain.app.ui.home.PortraitScreen
 import ru.secondbrain.app.ui.memory.ImportDetailScreen
 import ru.secondbrain.app.ui.memory.ImportsScreen
 import ru.secondbrain.app.ui.memory.MemoryItemScreen
@@ -118,12 +119,11 @@ import ru.secondbrain.app.ui.theme.Tone
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
 
+// The agent is home; chats, memory and the rest are reached from it (history and ☰ buttons).
 private val TABS = listOf(
-    Tab("home", "Главная", Icons.Outlined.Home),
-    Tab("finance", "Финансы", Icons.Outlined.AccountBalanceWallet),
+    Tab("home", "Агент", Icons.Outlined.AutoAwesome),
+    Tab("finance", "Деньги", Icons.Outlined.AccountBalanceWallet),
     Tab("fitness", "Тренировки", Icons.Outlined.FitnessCenter),
-    Tab("chat", "Чат", Icons.Outlined.ChatBubbleOutline),
-    Tab("memory", "Память", Icons.Outlined.Psychology),
 )
 
 @Composable
@@ -134,13 +134,15 @@ fun AppRoot(container: AppContainer, activity: FragmentActivity, pendingRoute: M
         var paired by remember { mutableStateOf<Boolean?>(null) }
         var onboarded by remember { mutableStateOf(true) }
         LaunchedEffect(Unit) {
-            paired = container.prefs.isPaired()
             onboarded = container.prefs.get(Prefs.Keys.onboardingDone) == true
+            // Follows the token, so a device revoked elsewhere drops back to pairing (see SyncManager).
+            container.prefs.flow(Prefs.Keys.tokenEnc).collect { paired = it != null }
         }
         CompositionLocalProvider(LocalContainer provides container, LocalSnackbar provides snackbar) {
             when {
                 paired == null -> Box(Modifier.fillMaxSize())
-                paired == false || !onboarded -> OnboardingScreen(startAtSetup = paired == true) {
+                paired == false || !onboarded -> OnboardingScreen(startAtSetup = paired == true,
+                    pairingOnly = paired == false && onboarded) {
                     paired = true; onboarded = true
                 }
                 else -> Locked(container, activity) { MainScaffold(container, pendingRoute) }
@@ -291,7 +293,9 @@ private fun Routes(nav: NavHostController) {
         composable("fitness/photos") { PhotosScreen() }
         composable("fitness/nutrition") { NutritionScreen() }
         composable("chat") { ConversationsScreen() }
-        composable("chat/{id}") { ChatScreen(it.arguments?.getString("id")!!) }
+        composable("chat/{id}?q={q}", arguments = listOf(navArgument("q") { type = NavType.StringType; nullable = true })) {
+            ChatScreen(it.arguments?.getString("id")!!, initial = it.arguments?.getString("q"))
+        }
         composable("memory") { MemoryScreen() }
         composable("memory/item/{id}") { MemoryItemScreen(it.arguments?.getString("id")!!) }
         composable("memory/people") { PeopleScreen() }
@@ -320,6 +324,7 @@ private fun Routes(nav: NavHostController) {
         composable("settings/devices") { DevicesScreen() }
         composable("updates") { UpdatesScreen() }
         composable("help") { HelpScreen() }
+        composable("portrait") { PortraitScreen() }
         composable("diagnostics") { DiagnosticsScreen() }
     }
 }

@@ -101,7 +101,7 @@ fun MemoryScreen() {
     }
     val list = memories.filter { it.isActual && it.status != "rejected" && (type == null || it.type == type) }
         .sortedByDescending { it.createdAt ?: "" }
-    Screen("Мозг агента", back = false, onRefresh = { c.sync.syncNow(); stats.reload(); questions.reload() },
+    Screen("Память", onRefresh = { c.sync.syncNow(); stats.reload(); questions.reload() },
         fab = { ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Запомнить") }) }) {
         item {
             AppCard(tint = Tone.current.memory) {

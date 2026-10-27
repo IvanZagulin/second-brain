@@ -1,43 +1,56 @@
 package ru.secondbrain.app.ui.home
 
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
-import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.outlined.Analytics
-import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.EmojiEmotions
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Loop
-import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SystemUpdate
-import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,291 +58,313 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import ru.secondbrain.app.core.Prefs
-import ru.secondbrain.app.core.daysWord
-import ru.secondbrain.app.core.nowIso
-import ru.secondbrain.app.core.parseDate
 import ru.secondbrain.app.core.parseInstant
 import ru.secondbrain.app.core.relative
 import ru.secondbrain.app.core.ruDate
 import ru.secondbrain.app.core.ruWeekday
-import ru.secondbrain.app.core.rub
 import ru.secondbrain.app.data.api.PlainJson
+import ru.secondbrain.app.data.model.Conversation
 import ru.secondbrain.app.data.model.E
+import ru.secondbrain.app.data.model.Experiment
+import ru.secondbrain.app.data.model.Habit
+import ru.secondbrain.app.data.model.Memory
+import ru.secondbrain.app.data.model.MoodEntry
+import ru.secondbrain.app.data.model.Note
+import ru.secondbrain.app.data.model.Person
 import ru.secondbrain.app.data.model.Task
 import ru.secondbrain.app.data.repo.jsonOf
 import ru.secondbrain.app.data.repo.str
 import ru.secondbrain.app.ui.components.AppCard
-import ru.secondbrain.app.ui.components.BigNumber
 import ru.secondbrain.app.ui.components.Divider
+import ru.secondbrain.app.ui.components.EmptyState
+import ru.secondbrain.app.ui.components.Field
 import ru.secondbrain.app.ui.components.Gap
 import ru.secondbrain.app.ui.components.Label
 import ru.secondbrain.app.ui.components.ListRow
 import ru.secondbrain.app.ui.components.LocalContainer
 import ru.secondbrain.app.ui.components.LocalNavigate
 import ru.secondbrain.app.ui.components.Markdown
-import ru.secondbrain.app.ui.components.Pill
-import ru.secondbrain.app.ui.components.ProgressBar
 import ru.secondbrain.app.ui.components.Screen
-import ru.secondbrain.app.ui.components.SectionTitle
-import ru.secondbrain.app.ui.components.Spark
 import ru.secondbrain.app.ui.components.Secondary
-import ru.secondbrain.app.ui.components.SwitchRow
-import ru.secondbrain.app.ui.tasks.MoodSheet
+import ru.secondbrain.app.ui.components.Spark
+import ru.secondbrain.app.ui.components.rememberAction
+import ru.secondbrain.app.ui.components.rememberLoad
 import ru.secondbrain.app.ui.theme.AgentProse
 import ru.secondbrain.app.ui.theme.Tone
 import java.time.LocalDate
 
-val HOME_CARDS = linkedMapOf(
-    "observation" to "Наблюдение агента", "finance" to "Деньги на сегодня", "obligations" to "Обязательства",
-    "workout" to "Ближайшая тренировка", "tasks" to "Задачи дня", "state" to "Состояние", "events" to "Последние события",
-    "budget" to "Расходы на Claude API",
-)
-val HomeCardsKey = stringPreferencesKey("home_cards")
+/** Kept so «Как пользоваться» can still be hidden from the menu once read. */
 val HelpDismissedKey = booleanPreferencesKey("help_dismissed")
 
+/**
+ * The agent is the home screen, as in Claude: today's few lines in its voice, a handful of things to ask,
+ * one question at a time, recent conversations and a composer. Everything else lives in the ☰ menu.
+ */
 @Composable
 fun HomeScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
     val scope = rememberCoroutineScope()
     val cached by c.prefs.flow(Prefs.Keys.homeCache).collectAsState(initial = null)
-    val cardsPref by c.prefs.flow(HomeCardsKey).collectAsState(initial = null)
-    val cards = cardsPref?.split(",")?.toSet() ?: HOME_CARDS.keys
     val home = cached?.let { runCatching { PlainJson.parseToJsonElement(it).jsonObject }.getOrNull() }
-    val tasks by c.store.observe(E.TASKS, Task.serializer()).collectAsState(initial = emptyList())
-    var moodOpen by remember { mutableStateOf(false) }
     val update by c.updates.available.collectAsState()
-    val helpDismissed by c.prefs.flow(HelpDismissedKey).collectAsState(initial = true)
+    val convs by c.store.observe(E.CONVERSATIONS, Conversation.serializer()).collectAsState(initial = emptyList())
+    val notes by c.store.observe(E.NOTES, Note.serializer()).collectAsState(initial = emptyList())
     LaunchedEffect(Unit) { c.sync.refreshHome() }
 
-    Screen(title = "", back = false, onRefresh = { c.sync.syncNow() },
-        actions = { IconButton(onClick = { nav("more") }) { Icon(Icons.Outlined.Tune, "Разделы", tint = Tone.current.textSecondary) } }) {
+    fun ask(text: String) = scope.launch {
+        val id = c.chat.newConversation()
+        nav("chat/$id?q=${Uri.encode(text)}")
+    }
 
-        item {
-            Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 10.dp)) {
+    val nw = home?.get("next_workout") as? JsonObject
+    val trainingToday = nw?.str("in_days") == "0"
+    val hasPortrait = notes.any { "портрет" in it.tags }
+    val recent = convs.filter { !it.archived && (it.kind == "agent" || it.title != "Новый диалог") }
+        .sortedByDescending { it.lastMessageAt ?: "" }.take(3)
+    val agentConv = (home?.get("observation") as? JsonObject)?.str("conversation_id")
+
+    Column(Modifier.fillMaxSize().background(Tone.current.bg)) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            item {
+                Row(Modifier.fillMaxWidth().statusBarsPadding(), verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = { nav("chat") }) { Icon(Icons.Outlined.History, "Все диалоги", tint = Tone.current.textSecondary) }
+                    IconButton(onClick = { nav("more") }) { Icon(Icons.Outlined.Menu, "Меню", tint = Tone.current.textSecondary) }
+                }
+            }
+            item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Spark(30.dp)
+                    Spark(28.dp)
                     Spacer(Modifier.width(12.dp))
                     Text(home?.str("greeting") ?: "Привет", style = MaterialTheme.typography.displaySmall)
                 }
                 Text("${ruWeekday(LocalDate.now()).replaceFirstChar { it.uppercase() }}, ${ruDate(LocalDate.now())}",
                     style = MaterialTheme.typography.bodyMedium, color = Tone.current.textSecondary,
-                    modifier = Modifier.padding(start = 42.dp, top = 2.dp))
+                    modifier = Modifier.padding(start = 40.dp, top = 2.dp))
             }
-        }
-
-        update?.let { u ->
-            item {
-                AppCard(onClick = { nav("updates") }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.SystemUpdate, null, tint = Tone.current.accent)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Доступна версия ${u.version}", style = MaterialTheme.typography.titleMedium)
-                            Secondary(if (c.updates.ready(u) != null) "Уже скачана — установка в одно касание" else "Нажмите, чтобы обновить")
+            update?.let { u ->
+                item {
+                    AppCard(onClick = { nav("updates") }, padding = 12.dp) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.SystemUpdate, null, tint = Tone.current.accent)
+                            Spacer(Modifier.width(12.dp))
+                            Text("Доступна версия ${u.version}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                            Text("Обновить", style = MaterialTheme.typography.labelLarge, color = Tone.current.accent)
                         }
-                        Text("Обновить", style = MaterialTheme.typography.labelLarge, color = Tone.current.accent)
+                    }
+                }
+            }
+            item {
+                Text(home?.str("brief") ?: "Секунду, собираю картину дня…", style = AgentProse,
+                    modifier = Modifier.clickable(enabled = agentConv != null) { nav("chat/$agentConv") })
+            }
+            item {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (hasPortrait) Suggestion("Что ты обо мне знаешь") { nav("portrait") }
+                    if (trainingToday) Suggestion("Начать тренировку") { nav("fitness") }
+                    Suggestion("Разбери мои траты") { ask("Разбери мои траты за последнюю неделю: что лишнее и где я сливаю деньги?") }
+                    Suggestion("Как прошла неделя") { ask("Как прошла моя неделя? Коротко: деньги, тренировки, что я обещал и не сделал.") }
+                    Suggestion("Как этим пользоваться") { nav("help") }
+                }
+            }
+            item { QuestionCard() }
+            if (recent.isNotEmpty()) {
+                item { Label("Недавние", Modifier.padding(top = 6.dp)) }
+                recent.forEach { conv ->
+                    item(key = conv.id) {
+                        Row(Modifier.fillMaxWidth().clickable { nav("chat/${conv.id}") }.padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            if (conv.kind == "agent") Spark(14.dp)
+                            else Icon(Icons.Outlined.ChatBubbleOutline, null, Modifier.size(16.dp), tint = Tone.current.textSecondary)
+                            Spacer(Modifier.width(10.dp))
+                            Text(if (conv.kind == "agent") "Агент пишет первым" else conv.title, style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Text(relative(parseInstant(conv.lastMessageAt)), style = MaterialTheme.typography.bodySmall,
+                                color = Tone.current.textSecondary)
+                        }
                     }
                 }
             }
         }
-
-        item { AskBox { scope.launch { nav("chat/${c.chat.newConversation()}") } } }
-
-        if (helpDismissed != true) item {
-            AppCard(onClick = { nav("help") }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.AutoMirrored.Outlined.HelpOutline, null, tint = Tone.current.accent)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Как пользоваться", style = MaterialTheme.typography.titleMedium)
-                        Secondary("Что умеет агент, что он помнит и где хранятся данные — 2 минуты")
-                    }
-                    IconButton(onClick = { scope.launch { c.prefs.set(HelpDismissedKey, true) } }) {
-                        Icon(Icons.Outlined.Close, "Скрыть", tint = Tone.current.textSecondary)
-                    }
-                }
-            }
-        }
-
-        val obs = home?.get("observation") as? JsonObject
-        if ("observation" in cards && obs != null) item {
-            AppCard(onClick = { obs.str("conversation_id")?.let { nav("chat/$it") } }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Spark(12.dp)
-                    Spacer(Modifier.width(6.dp))
-                    Label("Агент · ${relative(parseInstant(obs.str("at")))}")
-                }
-                Gap(8)
-                Text(obs.str("text") ?: "", style = AgentProse, maxLines = 6, overflow = TextOverflow.Ellipsis)
-            }
-        }
-
-        val fin = home?.get("finance") as? JsonObject
-        if ("finance" in cards) item {
-            AppCard(tint = Tone.current.finance, onClick = { nav("finance") }) {
-                Label("Можно потратить сегодня" + if (fin?.str("estimated") == "true") " · оценка" else "")
-                BigNumber(rub(fin?.get("today_left_minor")?.jsonPrimitive?.longOrNull),
-                    if ((fin?.get("today_left_minor")?.jsonPrimitive?.longOrNull ?: 0) < 0) Tone.current.negative else Tone.current.text)
-                val days = fin?.get("days_until_income")?.jsonPrimitive?.longOrNull
-                Secondary("Свободно ${rub(fin?.get("free_minor")?.jsonPrimitive?.longOrNull)}" +
-                    (days?.let { " · до поступления $it ${daysWord(it)}" } ?: ""))
-                if (fin?.str("savings_mode") == "true") { Gap(6); Pill("Режим экономии", Tone.current.motivation) }
-            }
-        }
-
-        val obligations = fin?.get("obligations")?.jsonArray?.map { it.jsonObject } ?: emptyList()
-        if ("obligations" in cards && obligations.isNotEmpty()) item {
-            AppCard {
-                Text("Обязательства", style = MaterialTheme.typography.titleMedium)
-                obligations.forEach { o ->
-                    val due = parseDate(o.str("due"))
-                    ListRow(o.str("title") ?: "", due?.let { ruDate(it) }, rub(o["amount_minor"]?.jsonPrimitive?.longOrNull))
-                }
-            }
-        }
-
-        val nw = home?.get("next_workout") as? JsonObject
-        if ("workout" in cards) item {
-            AppCard(tint = Tone.current.training, onClick = { nav("fitness") }) {
-                Label("Ближайшая тренировка")
-                if (nw == null) Text("Дни тренировок не заданы", style = MaterialTheme.typography.titleMedium)
-                else {
-                    val inDays = nw["in_days"]?.jsonPrimitive?.longOrNull ?: 0
-                    val whenText = when (inDays) { 0L -> "Сегодня"; 1L -> "Завтра"; else -> parseDate(nw.str("date"))?.let { ruWeekday(it).replaceFirstChar { c -> c.uppercase() } } ?: "" }
-                    Text("$whenText${nw.str("time")?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.headlineSmall)
-                    Secondary(nw.str("plan_name") ?: "Программа не выбрана")
-                }
-            }
-        }
-
-        val openTasks = tasks.filter { it.status == "open" && (it.due == null || parseDate(it.dueAt)?.let { d -> !d.isAfter(LocalDate.now()) } == true) }
-            .sortedWith(compareBy({ it.due == null }, { it.due })).take(6)
-        if ("tasks" in cards) item {
-            AppCard {
-                Text("Задачи дня", style = MaterialTheme.typography.titleMedium)
-                if (openTasks.isEmpty()) Secondary("На сегодня задач нет")
-                openTasks.forEach { t ->
-                    val overdue = t.due?.isBefore(java.time.Instant.now()) == true
-                    ListRow(t.title, if (overdue) "просрочено" else t.due?.let { relative(it) },
-                        icon = Icons.Outlined.RadioButtonUnchecked, iconTint = Tone.current.bg,
-                        onClick = { scope.launch { c.store.save(E.TASKS, jsonOf("status" to "done", "completed_at" to nowIso()), t.id) } })
-                }
-                OutlinedButton(onClick = { nav("tasks") }) { Text("Открыть задачи") }
-            }
-        }
-
-        val mood = home?.get("mood") as? JsonObject
-        if ("state" in cards) item {
-            AppCard(tint = Tone.current.motivation) {
-                Label("Состояние")
-                if (mood != null) {
-                    Text("Настроение ${mood.str("score")}/10", style = MaterialTheme.typography.headlineSmall)
-                    Secondary(listOfNotNull(mood.str("cause"), relative(parseInstant(mood.str("occurred_at")))).joinToString(" · "))
-                } else Secondary("Настроение ещё не записано")
-                Gap(6)
-                OutlinedButton(onClick = { moodOpen = true }) { Text("Записать настроение") }
-            }
-        }
-
-        val events = home?.get("events")?.jsonArray?.map { it.jsonObject } ?: emptyList()
-        if ("events" in cards && events.isNotEmpty()) item {
-            AppCard(onClick = { nav("memory") }) {
-                Text("Последние события", style = MaterialTheme.typography.titleMedium)
-                events.forEach { e -> ListRow(e.str("title") ?: "", relative(parseInstant(e.str("occurred_at")))) }
-            }
-        }
-
-        val budget = home?.get("api_budget") as? JsonObject
-        if ("budget" in cards && budget != null) item {
-            AppCard(onClick = { nav("settings/usage") }) {
-                val spent = budget.str("spent_usd")?.toDoubleOrNull() ?: 0.0
-                val limit = budget.str("limit_usd")?.toDoubleOrNull() ?: 100.0
-                Label("Claude API в этом месяце")
-                Text("$%.2f из $%.0f".format(spent, limit), style = MaterialTheme.typography.titleMedium)
-                Gap(6)
-                ProgressBar((spent / limit).toFloat().coerceIn(0f, 1f))
-            }
-        }
-
-        item { SectionTitle("Разделы") }
-        item { SectionsGrid(nav) }
+        Composer { text -> ask(text) }
     }
-    if (moodOpen) MoodSheet { moodOpen = false }
 }
 
-/** Claude-style composer stub: a calm field with a round send button; tapping opens a new conversation. */
 @Composable
-private fun AskBox(onOpen: () -> Unit) {
-    Surface(onClick = onOpen, shape = RoundedCornerShape(24.dp), color = Tone.current.surface,
-        border = BorderStroke(1.dp, Tone.current.outline), shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(start = 18.dp, end = 10.dp, top = 16.dp, bottom = 10.dp)) {
-            Text("Спросите о деньгах, тренировке или планах…", style = MaterialTheme.typography.bodyLarge,
-                color = Tone.current.textSecondary)
-            Row(Modifier.fillMaxWidth().padding(top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.weight(1f))
-                Box(Modifier.size(36.dp).background(Tone.current.accent, RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.ArrowUpward, "Спросить", tint = Color.White, modifier = Modifier.size(20.dp))
-                }
+private fun Suggestion(text: String, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(16.dp), color = Tone.current.surface,
+        border = BorderStroke(1.dp, Tone.current.outline)) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp))
+    }
+}
+
+/** One question at a time: answer, ask later, or never ask again. */
+@Composable
+private fun QuestionCard() {
+    val c = LocalContainer.current
+    val act = rememberAction()
+    val data = rememberLoad { c.api.get("/api/v1/memories/questions/open").jsonObject["items"]!!.jsonArray.map { it.jsonObject } }
+    val skipped = remember { mutableStateListOf<String>() }
+    var answering by remember { mutableStateOf(false) }
+    var answer by remember { mutableStateOf("") }
+    val queue = (data.value ?: emptyList()).filter { it.str("id") !in skipped }
+    val q = queue.firstOrNull() ?: return
+    val id = q.str("id")!!
+    fun next() { answering = false; answer = ""; skipped += id }
+    AppCard(padding = 14.dp) {
+        Label(if (queue.size > 1) "Вопрос · ещё ${queue.size - 1}" else "Вопрос")
+        Gap(4)
+        Text(q.str("question") ?: "", style = MaterialTheme.typography.bodyLarge)
+        if (answering) {
+            Gap(8)
+            Field(answer, { answer = it }, "Ответ", singleLine = false)
+        }
+        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (answering) TextButton(enabled = answer.isNotBlank(), onClick = {
+                act("Запомнил") { c.api.post("/api/v1/memories/questions/$id/answer", jsonOf("answer" to answer)); next() }
+            }) { Text("Сохранить") }
+            else TextButton(onClick = { answering = true }) { Text("Ответить") }
+            TextButton(onClick = { next() }) { Text("Позже", color = Tone.current.textSecondary) }
+            TextButton(onClick = { act(null) { c.api.post("/api/v1/memories/questions/$id/dismiss"); next() } }) {
+                Text("Не спрашивать", color = Tone.current.textSecondary)
             }
         }
     }
 }
 
 @Composable
-private fun SectionsGrid(nav: (String) -> Unit) {
-    val items = listOf(
-        Triple("Как пользоваться", Icons.AutoMirrored.Outlined.HelpOutline, "help"),
-        Triple("Задачи и цели", Icons.AutoMirrored.Outlined.ListAlt, "tasks"),
-        Triple("Привычки", Icons.Outlined.Loop, "habits"),
-        Triple("Эксперименты", Icons.Outlined.Science, "experiments"),
-        Triple("Настроение", Icons.Outlined.EmojiEmotions, "mood"),
-        Triple("Заметки", Icons.Outlined.EditNote, "notes"),
-        Triple("Аналитика", Icons.Outlined.Analytics, "analytics"),
-        Triple("История агента", Icons.Outlined.History, "agent/history"),
-        Triple("Обновления", Icons.Outlined.SystemUpdate, "updates"),
-        Triple("Настройки", Icons.Outlined.Settings, "settings"),
+private fun Composer(onSend: (String) -> Unit) {
+    var input by remember { mutableStateOf("") }
+    Surface(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 8.dp),
+        shape = RoundedCornerShape(24.dp), color = Tone.current.surface, border = BorderStroke(1.dp, Tone.current.outline),
+        shadowElevation = 1.dp) {
+        Row(Modifier.padding(start = 4.dp, end = 8.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextField(value = input, onValueChange = { input = it }, modifier = Modifier.weight(1f), maxLines = 5,
+                placeholder = { Text("Спросите что угодно…", color = Tone.current.textSecondary) },
+                textStyle = MaterialTheme.typography.bodyLarge,
+                colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
+                    cursorColor = Tone.current.accent))
+            val ready = input.isNotBlank()
+            Surface(onClick = { if (ready) { onSend(input.trim()); input = "" } }, enabled = ready, shape = RoundedCornerShape(12.dp),
+                color = if (ready) Tone.current.accent else Tone.current.fill, modifier = Modifier.size(36.dp)) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.ArrowUpward, "Спросить", Modifier.size(20.dp),
+                        tint = if (ready) Color.White else Tone.current.textSecondary)
+                }
+            }
+        }
+    }
+}
+
+private data class MenuItem(val label: String, val icon: ImageVector, val route: String, val count: Int?, val hint: String? = null)
+
+/** Everything that isn't a tab. Sections with nothing in them yet fold away under one row. */
+@Composable
+fun MoreScreen() {
+    val c = LocalContainer.current
+    val nav = LocalNavigate.current
+    val tasks by c.store.observe(E.TASKS, Task.serializer()).collectAsState(initial = emptyList())
+    val habits by c.store.observe(E.HABITS, Habit.serializer()).collectAsState(initial = emptyList())
+    val notes by c.store.observe(E.NOTES, Note.serializer()).collectAsState(initial = emptyList())
+    val exps by c.store.observe(E.EXPERIMENTS, Experiment.serializer()).collectAsState(initial = emptyList())
+    val moods by c.store.observe(E.MOOD, MoodEntry.serializer()).collectAsState(initial = emptyList())
+    val memories by c.store.observe(E.MEMORIES, Memory.serializer()).collectAsState(initial = emptyList())
+    val people by c.store.observe(E.PEOPLE, Person.serializer()).collectAsState(initial = emptyList())
+    val convs by c.store.observe(E.CONVERSATIONS, Conversation.serializer()).collectAsState(initial = emptyList())
+    var showEmpty by remember { mutableStateOf(false) }
+
+    val you = listOfNotNull(
+        MenuItem("Что я о тебе знаю", Icons.Outlined.Face, "portrait", null).takeIf { notes.any { "портрет" in it.tags } },
+        MenuItem("Память", Icons.Outlined.Psychology, "memory", memories.size),
+        MenuItem("Люди", Icons.Outlined.People, "memory/people", people.size),
+        MenuItem("Все диалоги", Icons.Outlined.ChatBubbleOutline, "chat", convs.count { !it.archived }),
     )
+    val life = listOf(
+        MenuItem("Задачи и обещания", Icons.AutoMirrored.Outlined.ListAlt, "tasks", tasks.count { it.status == "open" },
+            "Агент сам ведёт то, что вы пообещали в разговорах"),
+        MenuItem("Привычки", Icons.Outlined.Loop, "habits", habits.count { it.isActive }, "Хорошие держать, плохие бросать"),
+        MenuItem("Настроение", Icons.Outlined.EmojiEmotions, "mood", moods.size, "Пара секунд вечером — агент увидит связь со сном и тратами"),
+        MenuItem("Заметки", Icons.Outlined.EditNote, "notes", notes.size, "Быстро записать мысль, агент разберёт"),
+        MenuItem("Эксперименты", Icons.Outlined.Science, "experiments", exps.size, "«Месяц без донатов» — и честный итог"),
+    )
+    val (filled, empty) = life.partition { (it.count ?: 0) > 0 }
+
+    Screen("Меню") {
+        item { MenuGroup(you, nav) }
+        if (filled.isNotEmpty()) item { MenuGroup(filled, nav) }
+        if (empty.isNotEmpty()) item {
+            AppCard(padding = 6.dp) {
+                ListRow(if (showEmpty) "Скрыть" else "Ещё разделы · ${empty.size}", null,
+                    icon = if (showEmpty) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore) { showEmpty = !showEmpty }
+                if (showEmpty) empty.forEach { m ->
+                    Divider()
+                    ListRow(m.label, m.hint, icon = m.icon) { nav(m.route) }
+                }
+            }
+        }
+        item {
+            MenuGroup(listOf(
+                MenuItem("Аналитика", Icons.Outlined.Analytics, "analytics", null),
+                MenuItem("История агента", Icons.Outlined.History, "agent/history", null),
+                MenuItem("Настройки", Icons.Outlined.Settings, "settings", null),
+                MenuItem("Обновления", Icons.Outlined.SystemUpdate, "updates", null),
+                MenuItem("Как пользоваться", Icons.AutoMirrored.Outlined.HelpOutline, "help", null),
+            ), nav)
+        }
+    }
+}
+
+@Composable
+private fun MenuGroup(items: List<MenuItem>, nav: (String) -> Unit) {
+    if (items.isEmpty()) return
     AppCard(padding = 6.dp) {
-        items.forEachIndexed { i, (label, icon, route) ->
-            ListRow(label, icon = icon, onClick = { nav(route) })
+        items.forEachIndexed { i, m ->
+            ListRow(m.label, null, trailing = m.count?.takeIf { it > 0 }?.toString(), trailingColor = Tone.current.textSecondary,
+                icon = m.icon) { nav(m.route) }
             if (i != items.lastIndex) Divider()
         }
     }
 }
 
+/** The portrait written from archives, on its own screen rather than buried among notes. */
 @Composable
-fun MoreScreen() {
+fun PortraitScreen() {
     val c = LocalContainer.current
-    val scope = rememberCoroutineScope()
-    val pref by c.prefs.flow(HomeCardsKey).collectAsState(initial = null)
-    val enabled = pref?.split(",")?.toSet() ?: HOME_CARDS.keys
     val nav = LocalNavigate.current
-    Screen("Разделы и главная") {
-        item { SectionsGrid(nav) }
-        item { SectionTitle("Карточки на главной") }
+    val notes by c.store.observe(E.NOTES, Note.serializer()).collectAsState(initial = emptyList())
+    val memories by c.store.observe(E.MEMORIES, Memory.serializer()).collectAsState(initial = emptyList())
+    val people by c.store.observe(E.PEOPLE, Person.serializer()).collectAsState(initial = emptyList())
+    val portrait = notes.filter { "портрет" in it.tags }.maxByOrNull { it.createdAt ?: "" }
+    Screen("Что я о тебе знаю") {
         item {
-            AppCard {
-                HOME_CARDS.forEach { (key, label) ->
-                    SwitchRow(label, checked = key in enabled) { on ->
-                        val next = if (on) enabled + key else enabled - key
-                        scope.launch { c.prefs.set(HomeCardsKey, next.joinToString(",")) }
-                    }
-                }
+            Secondary("${memories.size} воспоминаний · ${people.size} людей. Это взгляд по переписке и разговорам, " +
+                "а не оценка — поправьте, если что-то не так.")
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Suggestion("Память") { nav("memory") }
+                Suggestion("Люди") { nav("memory/people") }
+                Suggestion("Импорт архивов") { nav("memory/imports") }
             }
+        }
+        if (portrait == null) item {
+            EmptyState("Портрет появится, когда агент прочитает ваши архивы или узнает вас по разговорам.",
+                "Импорт архивов") { nav("memory/imports") }
+        } else item {
+            // The note's first line is its title; the screen already has one.
+            Markdown(portrait.text.substringAfter("\n").trim(), style = AgentProse)
         }
     }
 }
