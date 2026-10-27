@@ -62,7 +62,9 @@ async def parse_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, Any]
             async with session_scope() as db:
                 j = await db.get(ImportJob, job_id)
                 j.stats = {**(j.stats or {}), "progress_chats": totals["chats"]}
-        estimates = {t: float(estimate_cost(totals["chars"], len(chat_stats), totals["messages"], t)) for t in READ_MODELS}
+        # AI chats are read grouped by time, so together they add one period of overhead, not one per chat.
+        units = sum(1 for c in chat_stats if not c["ai"]) + (1 if any(c["ai"] for c in chat_stats) else 0)
+        estimates = {t: float(estimate_cost(totals["chars"], units, totals["messages"], t)) for t in READ_MODELS}
         async with session_scope() as db:
             j = await db.get(ImportJob, job_id)
             j.kind = kind
@@ -135,7 +137,8 @@ async def _store_chat(owner_id: uuid.UUID, job_id: uuid.UUID, chat: adapters.Par
 
     for m in chat.messages:
         total += 1
-        chars += len(m.text)
+        # As the analysis will see it: assistant replies are read briefly (agent.archive.ASSISTANT_REPLY_CHARS).
+        chars += min(len(m.text), 600) if m.author_id in ("assistant", "model") else min(len(m.text), 4000)
         if m.author_id:
             authors[m.author_id] += 1
             names[m.author_id] = m.author or m.author_id
@@ -153,7 +156,8 @@ async def _store_chat(owner_id: uuid.UUID, job_id: uuid.UUID, chat: adapters.Par
                                 .where(ImportMessage.chat_id == chat_id))).one()
         ic.message_count, ic.first_at, ic.last_at = agg[0], agg[1], agg[2]
         ic.participants = [{"id": a, "name": names.get(a), "messages": n} for a, n in authors.most_common(20)]
-    return {"chat_id": str(chat_id), "source_id": str(source_id), "title": chat.title, "messages": total, "new": new,
+    return {"chat_id": str(chat_id), "source_id": str(source_id), "title": chat.title, "ai": chat.chat_type == "ai",
+            "messages": total, "new": new,
             "chars": chars, "participants": [{"id": a, "name": names.get(a), "messages": n}
                                              for a, n in authors.most_common(5)]}
 

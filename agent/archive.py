@@ -42,6 +42,9 @@ PORTRAIT_MODEL = "claude-opus-5-5"
 # Haiku is billed at a higher tier above 100k prompt tokens, so its periods stay below that.
 PERIOD_TOKENS = {"economy": 80_000, "balanced": 110_000, "max": 110_000}
 WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+# In chats with AI assistants the owner's words carry the portrait; the assistant's replies are context only.
+ASSISTANT_IDS = {"assistant", "model"}
+ASSISTANT_REPLY_CHARS = 600
 
 PERIOD_SYSTEM = """\
 Ты — модуль долговременной памяти личного ИИ-агента. Тебе дают период из архива владельца: переписку \
@@ -159,11 +162,21 @@ def speaker_labels(participants: list[dict[str, Any]]) -> dict[str, str]:
     return labels
 
 
-def format_lines(rows: list[ImportMessage], labels: dict[str, str], tz_name: str) -> list[str]:
+def _line_text(r: ImportMessage) -> str:
+    limit = ASSISTANT_REPLY_CHARS if r.author_id in ASSISTANT_IDS else 4000
+    return r.text[:limit] + ("…" if len(r.text) > limit else "")
+
+
+def format_lines(rows: list[ImportMessage], labels: dict[str, str], tz_name: str,
+                 chat_titles: dict[uuid.UUID, str] | None = None) -> list[str]:
+    """``chat_titles``: the period mixes several conversations; each starts with a header."""
     zone = tz(tz_name)
     out: list[str] = []
-    day = last_time = None
+    day = last_time = last_chat = None
     for i, r in enumerate(rows, start=1):
+        if chat_titles is not None and r.chat_id != last_chat:
+            out.append(f"### Диалог «{chat_titles.get(r.chat_id, '?')}»")
+            last_chat, day = r.chat_id, None
         local = r.sent_at.astimezone(zone) if r.sent_at else None
         d = local.date() if local else None
         if d != day or not out:
@@ -171,7 +184,7 @@ def format_lines(rows: list[ImportMessage], labels: dict[str, str], tz_name: str
             day, last_time = d, None
         t = f"{local:%H:%M}" if local else ""
         who = "Я" if r.is_self else labels.get(r.author_id, (r.author or "?")[:1].upper())
-        text = " / ".join(part.strip() for part in r.text[:4000].splitlines() if part.strip())
+        text = " / ".join(part.strip() for part in _line_text(r).splitlines() if part.strip())
         out.append(f"{i} {t + ' ' if t and t != last_time else ''}{who}: {text}")
         last_time = t
     return out
@@ -202,7 +215,7 @@ async def _periods(chat_id: uuid.UUID, upto_id: int | None, budget: int) -> Asyn
             if day != last_day:
                 day_starts.append(len(buf))
                 last_day = day
-            cost = _tokens(r.text[:4000]) + 3
+            cost = _tokens(_line_text(r)) + 3
             if buf and used + cost > budget:
                 # Prefer to end the period at the start of the last day if that keeps most of it.
                 cut = next((s for s in reversed(day_starts) if 0 < s <= len(buf)), len(buf))
@@ -210,12 +223,37 @@ async def _periods(chat_id: uuid.UUID, upto_id: int | None, budget: int) -> Asyn
                     cut = len(buf)
                 yield buf[:cut]
                 buf = buf[cut:]
-                used = sum(_tokens(m.text[:4000]) + 3 for m in buf)
+                used = sum(_tokens(_line_text(m)) + 3 for m in buf)
                 day_starts = [0] if buf else []
                 last_day = buf[-1].sent_at.date() if buf and buf[-1].sent_at else None
                 if day != last_day:
                     day_starts.append(len(buf))
                     last_day = day
+            buf.append(r)
+            used += cost
+    if buf:
+        yield buf
+
+
+async def _grouped_periods(chats: list[ImportChat], budget: int) -> AsyncIterator[list[ImportMessage]]:
+    """Short conversations (AI chats, notes) grouped by time into periods; one is split only when it alone
+    outgrows a period."""
+    buf: list[ImportMessage] = []
+    used = 0
+    for chat in sorted(chats, key=lambda c: (c.first_at is None, c.first_at)):
+        async with session_scope() as db:
+            q = select(ImportMessage).where(ImportMessage.chat_id == chat.id, ImportMessage.excluded.is_(False))
+            if chat.analyzed_upto_id:
+                q = q.where(ImportMessage.id > chat.analyzed_upto_id)
+            rows = (await db.execute(q.order_by(ImportMessage.id))).scalars().all()
+        costs = [_tokens(_line_text(r)) + 3 for r in rows]
+        if buf and used + sum(costs) > budget:
+            yield buf
+            buf, used = [], 0
+        for r, cost in zip(rows, costs):
+            if buf and used + cost > budget:
+                yield buf
+                buf, used = [], 0
             buf.append(r)
             used += cost
     if buf:
@@ -229,12 +267,12 @@ async def analyze_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, An
             return {"skip": True}
         job.status = "analyzing"
         tier = (job.options or {}).get("tier") or "balanced"
+        want_portrait = (job.options or {}).get("portrait", True)
         user = await db.get(User, owner_id)
         tz_name = user.timezone if user else "Europe/Moscow"
         chats = (await db.execute(select(ImportChat).join(MemorySource, MemorySource.id == ImportChat.source_id).where(
             ImportChat.import_job_id == job_id, ImportChat.excluded.is_(False), MemorySource.excluded.is_(False),
             MemorySource.allow_llm.is_(True)))).scalars().all()
-        chat_list = [(c.id, c.source_id, c.title, c.analyzed_upto_id, c.participants or []) for c in chats]
         total = sum(c.message_count for c in chats) or 1
         done_msgs = 0  # resuming after a pause: count what is already read
         for c in chats:
@@ -246,51 +284,78 @@ async def analyze_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, An
     stats = {"facts": 0, "people": 0, "events": 0, "questions": 0, "chunks": 0, "tier": tier, "model": model}
     log_path = chronicles_path(job_id)
 
-    for chat_id, source_id, title, upto_id, participants in chat_list:
-        labels = speaker_labels([p for p in participants if p.get("id")])
-        legend = "; ".join(f"{lab} — {next((p['name'] for p in participants if p.get('id') == aid), aid)}"
-                           for aid, lab in labels.items())
-        async for rows in _periods(chat_id, upto_id, budget):
-            lines = format_lines(rows, labels, tz_name)
-            ref_ids = {i: r.id for i, r in enumerate(rows, start=1)}
+    titles = {c.id: c.title for c in chats}
+
+    async def read(rows: list[ImportMessage], labels: dict[str, str], legend: str, grouped: bool) -> str | None:
+        """One period: model call, memory, chronicle, progress. Returns "paused"/"cancelled" to stop."""
+        nonlocal done_msgs
+        lines = format_lines(rows, labels, tz_name, chat_titles=titles if grouped else None)
+        ref_rows = {i: r for i, r in enumerate(rows, start=1)}
+        chat_ids = list(dict.fromkeys(r.chat_id for r in rows))
+        title = titles.get(chat_ids[0], "") if not grouped else (
+            f"{len(chat_ids)} диалогов: " + ", ".join(f"«{titles.get(c, '')}»" for c in chat_ids[:6])
+            + (" …" if len(chat_ids) > 6 else ""))
+        async with session_scope() as db:
+            sample = " ".join(r.text for r in rows if r.is_self)[:1500] or title
+            known = await search_memories(db, owner_id, sample, limit=12, for_llm=False)
+        span = (rows[0].sent_at, rows[-1].sent_at)
+        try:
+            parsed = await call_json(
+                owner_id, "import", model=model, effort="medium", max_tokens=16000,
+                system=PERIOD_SYSTEM, schema=PERIOD_SCHEMA, job_id=job_id,
+                user=f"Источник: {'«' + title + '»' if not grouped else title}. Метки: Я — владелец; {legend or 'нет'}.\n"
+                     f"Уже известно о владельце:\n{format_memories(known) or '—'}\n\nПериод:\n" + "\n".join(lines))
+        except BudgetExceeded as exc:
             async with session_scope() as db:
-                sample = " ".join(r.text for r in rows if r.is_self)[:1500] or title
-                known = await search_memories(db, owner_id, sample, limit=12, for_llm=False)
-            span = (rows[0].sent_at, rows[-1].sent_at)
-            try:
-                parsed = await call_json(
-                    owner_id, "import", model=model, effort="medium", max_tokens=16000,
-                    system=PERIOD_SYSTEM, schema=PERIOD_SCHEMA, job_id=job_id,
-                    user=f"Источник: «{title}». Метки: Я — владелец; {legend or 'нет'}.\n"
-                         f"Уже известно о владельце:\n{format_memories(known) or '—'}\n\nПериод:\n" + "\n".join(lines))
-            except BudgetExceeded as exc:
-                async with session_scope() as db:
-                    j = await db.get(ImportJob, job_id)
-                    j.status, j.error = "paused", exc.message
-                return {"paused": True, **stats}
-            sid = str(source_id)
-            res = await save_extraction(
-                owner_id, parsed, tz_name=tz_name, source_kind="import", source_id=source_id, create_tasks=False,
-                evidence_for=lambda refs: [{"kind": "import_message", "id": ref_ids[r], "source_id": sid}
-                                           for r in refs if r in ref_ids],
-                default_evidence=[{"kind": "import_chat", "id": str(chat_id), "source_id": sid}])
-            entry = {"chat_id": str(chat_id), "source_id": sid, "title": title, "chunk": stats["chunks"],
-                     "from": span[0].isoformat() if span[0] else None, "to": span[1].isoformat() if span[1] else None,
-                     "messages": len(rows), "chronicle": (parsed.get("chronicle") or "").strip()}
-            with log_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
-            for k in ("facts", "people", "events", "questions"):
-                stats[k] += res.get(k, 0)
-            stats["chunks"] += 1
-            done_msgs += len(rows)
-            async with session_scope() as db:
-                c = await db.get(ImportChat, chat_id)
-                c.analyzed_upto_id, c.analyzed_until = rows[-1].id, rows[-1].sent_at
                 j = await db.get(ImportJob, job_id)
-                if j.status == "cancelled":
-                    return {"cancelled": True, **stats}
-                j.progress = min(done_msgs / total, 0.97)
-                j.stats = {**(j.stats or {}), "analysis": stats}
+                j.status, j.error = "paused", exc.message
+            return "paused"
+        first = rows[0]
+        res = await save_extraction(
+            owner_id, parsed, tz_name=tz_name, source_kind="import", source_id=first.source_id, create_tasks=False,
+            evidence_for=lambda refs: [{"kind": "import_message", "id": ref_rows[r].id,
+                                        "source_id": str(ref_rows[r].source_id)} for r in refs if r in ref_rows],
+            default_evidence=[{"kind": "import_chat", "id": str(first.chat_id), "source_id": str(first.source_id)}])
+        entry = {"chat_id": str(first.chat_id), "source_id": str(first.source_id), "title": title,
+                 "chunk": stats["chunks"], "from": span[0].isoformat() if span[0] else None,
+                 "to": span[1].isoformat() if span[1] else None, "messages": len(rows),
+                 "chronicle": (parsed.get("chronicle") or "").strip()}
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        for k in ("facts", "people", "events", "questions"):
+            stats[k] += res.get(k, 0)
+        stats["chunks"] += 1
+        done_msgs += len(rows)
+        async with session_scope() as db:
+            for cid in chat_ids:
+                last = max((r for r in rows if r.chat_id == cid), key=lambda r: r.id)
+                c = await db.get(ImportChat, cid)
+                c.analyzed_upto_id, c.analyzed_until = last.id, last.sent_at
+            j = await db.get(ImportJob, job_id)
+            if j.status == "cancelled":
+                return "cancelled"
+            j.progress = min(done_msgs / total, 0.97)
+            j.stats = {**(j.stats or {}), "analysis": stats}
+        return None
+
+    def legend_for(participants: list[dict[str, Any]]) -> tuple[dict[str, str], str]:
+        labels = speaker_labels([p for p in participants if p.get("id")])
+        names = {p.get("id"): p.get("name") for p in participants}
+        return labels, "; ".join(f"{lab} — {names.get(aid, aid)}" for aid, lab in labels.items())
+
+    # Conversations with people are read on their own; AI chats and notes are grouped by time.
+    grouped = [c for c in chats if c.chat_type == "ai"]
+    for c in (c for c in chats if c.chat_type != "ai"):
+        labels, legend = legend_for(c.participants or [])
+        async for rows in _periods(c.id, c.analyzed_upto_id, budget):
+            if (stop := await read(rows, labels, legend, grouped=False)):
+                return {stop: True, **stats}
+    if grouped:
+        merged = {p.get("id"): p for c in grouped for p in (c.participants or []) if p.get("id")}
+        labels, legend = legend_for(list(merged.values()))
+        async for rows in _grouped_periods(grouped, budget):
+            if (stop := await read(rows, labels, legend, grouped=True)):
+                return {stop: True, **stats}
 
     portrait_ok = False
     # The portrait covers every analysed archive, not just this one: earlier imports' chronicles join in.
@@ -298,7 +363,9 @@ async def analyze_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, An
         job_ids = (await db.execute(select(ImportJob.id).where(
             ImportJob.owner_id == owner_id, ImportJob.status.in_(("done", "analyzing"))))).scalars().all()
     chronicles = [c for jid in {*job_ids, job_id} for c in read_chronicles(jid)]
-    if chronicles:
+    if chronicles and not want_portrait:
+        portrait_ok = True  # read now, portrait later over everything: nothing else to do for this archive
+    elif chronicles:
         try:
             portrait_ok = await build_portrait(owner_id, job_id, chronicles, tz_name)
         except BudgetExceeded as exc:

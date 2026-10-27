@@ -96,7 +96,8 @@ def detect(path: Path) -> str:
                 return "claude" if "chat_messages" in head else "chatgpt"
             if any(n.rsplit("/", 1)[-1] == "messages.html" for n in names):
                 return "telegram_html"
-            if any(n.rsplit("/", 1)[-1] in ("profile.md", "preferences.md") for n in names):
+            if any(n.rsplit("/", 1)[-1] in ("profile.md", "preferences.md") for n in names) or \
+                    any(n.startswith("memories/") and n.endswith(".json") for n in names):
                 return "claude_memory"
         raise UnknownFormat("В архиве не найден известный формат экспорта")
     with path.open("rb") as f:
@@ -416,9 +417,30 @@ def _zip_name(info: zipfile.ZipInfo) -> str:
 
 
 def claude_memory_chats(path: Path) -> Iterator[ParsedChat]:
-    """Claude's memory export is already a digest about the owner: each note becomes one fragment to analyse."""
+    """Claude's memory export is already a digest about the owner: each note becomes one fragment to analyse.
+
+    Two shapes: the memory tool's Markdown notes, or the account data export's ``memories/<id>.json`` with the
+    overall conversations memory, per-project memories and the same notes as ``memory_files``."""
     with zipfile.ZipFile(path) as zf:
         msgs = []
+        for info in zf.infolist():
+            name = _zip_name(info)
+            if not (name.startswith("memories/") and name.endswith(".json")):
+                continue
+            data = json.loads(zf.read(info).decode("utf-8", errors="replace"))
+            when = datetime(*info.date_time, tzinfo=timezone.utc)
+
+            def note(ext_id: str, label: str, text: str | None) -> None:
+                if text and text.strip():
+                    msgs.append(ParsedMessage(external_id=ext_id, author="Claude (память)", author_id="claude_memory",
+                                              sent_at=when, text=f"[{label}]\n{text.strip()}", is_self=False))
+
+            note("conversations_memory", "Память Claude по всем разговорам", data.get("conversations_memory"))
+            for pid, text in (data.get("project_memories") or {}).items():
+                note(f"project:{pid}", f"Память Claude о проекте {pid[:8]}", text)
+            for f in data.get("memory_files") or []:
+                rel = (f.get("path") or "").lstrip("/")
+                note(rel, f"Заметка памяти Claude: {rel}", f.get("content"))
         for info in sorted(zf.infolist(), key=_zip_name):
             name = _zip_name(info)
             if info.is_dir() or not name.lower().endswith(".md"):
