@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agent.persona import MODE_LABELS
 from app.core.money import fmt_rub
 from app.core.timeutil import RU_WEEKDAYS, local_now, parse_hhmm, ru_date, utcnow
-from app.models import AgentAction, Conversation, Task, User, Workout, WorkoutPlan
+from app.models import AgentAction, Conversation, Memory, Message, Task, User, Workout, WorkoutPlan
 from app.services.finance.engine import finance_summary
 from app.services.memory import format_memories, search_memories
 from app.services.settings import get_all_settings
@@ -39,6 +39,40 @@ def _day_phase(settings: dict, now) -> str:
     return "поздний вечер, время сна"
 
 
+async def recent_digest(db: AsyncSession, owner_id: uuid.UUID, now: datetime, *, since: datetime,
+                        exclude: uuid.UUID | None = None, with_day: bool = True) -> str | None:
+    """What the owner said in other conversations since ``since`` and, with ``with_day``, what today already
+    holds. Conversations don't see each other otherwise: the evening check-in asked how the day went right after
+    the owner had written in another chat that he was ill and skipped the gym."""
+    q = (select(Message.created_at, Message.text, Conversation.title, Conversation.kind)
+         .join(Conversation, Conversation.id == Message.conversation_id)
+         .where(Message.owner_id == owner_id, Message.role == "user", Message.created_at >= since,
+                Conversation.deleted_at.is_(None)))
+    if exclude is not None:
+        q = q.where(Message.conversation_id != exclude)
+    rows = (await db.execute(q.order_by(Message.created_at.desc()).limit(12))).all()
+    parts = []
+    if rows:
+        parts.append("Что владелец писал в других диалогах:\n" + "\n".join(
+            f"- {r.created_at.astimezone(now.tzinfo):%d.%m %H:%M}, «{'Агент' if r.kind == 'agent' else r.title}»: "
+            f"{r.text[:300]}" for r in reversed(rows)))
+    if with_day:
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        w = (await db.execute(select(Workout).where(
+            Workout.owner_id == owner_id, Workout.deleted_at.is_(None), Workout.started_at >= start,
+            Workout.status.in_(("done", "skipped"))).order_by(Workout.started_at.desc()).limit(1))).scalar_one_or_none()
+        if w is not None:
+            parts.append("Тренировка сегодня: " + ("сделана" if w.status == "done" else "пропущена")
+                         + (f" ({w.skip_reason})" if w.skip_reason else "") + (f"; {w.notes}" if w.notes else "") + ".")
+        fresh = (await db.execute(select(Memory).where(
+            Memory.owner_id == owner_id, Memory.deleted_at.is_(None), Memory.type == "episodic",
+            Memory.source_kind != "import", Memory.created_at >= utcnow() - timedelta(hours=36))
+            .order_by(Memory.created_at.desc()).limit(6))).scalars().all()
+        if fresh:
+            parts.append("Свежее в памяти:\n" + format_memories(fresh))
+    return "\n".join(parts) or None
+
+
 async def build_context(db: AsyncSession, owner_id: uuid.UUID, conversation: Conversation, user_text: str,
                         *, first_in_segment: bool, mode: str) -> str:
     user = await db.get(User, owner_id)
@@ -62,6 +96,16 @@ async def build_context(db: AsyncSession, owner_id: uuid.UUID, conversation: Con
     mems = await search_memories(db, owner_id, user_text, limit=6) if user_text.strip() else []
     if mems:
         lines.append("Возможно относящиеся воспоминания:\n" + format_memories(mems))
+
+    # Each turn's context stays in the history, so later turns carry only what is new since the last one here.
+    last_here = (await db.execute(select(func.max(Message.created_at)).where(
+        Message.conversation_id == conversation.id))).scalar_one_or_none()
+    since = utcnow() - timedelta(hours=20)
+    if not first_in_segment and last_here is not None:
+        since = max(since, last_here)
+    digest = await recent_digest(db, owner_id, now, since=since, exclude=conversation.id, with_day=first_in_segment)
+    if digest:
+        lines.append(digest)
 
     want_finance = mode == "finance" or bool(FINANCE_WORDS.search(user_text))
     want_fitness = mode == "trainer" or bool(FITNESS_WORDS.search(user_text))

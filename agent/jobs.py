@@ -17,6 +17,7 @@ from sqlalchemy import select, update
 
 from agent import archive, extraction, initiative, reports, rules
 from agent.chat import system_prompt
+from agent.context import recent_digest
 from agent.tools import ToolCtx, execute, tool_definitions
 from app.core.db import session_scope
 from app.core.errors import ApiError, BudgetExceeded
@@ -117,13 +118,14 @@ async def run_followup(owner_id: uuid.UUID, job: dict[str, Any]) -> dict[str, An
         system = await system_prompt(db, owner_id)
         user = await db.get(User, owner_id)
         tz_name = user.timezone if user else "Europe/Moscow"
-    now = local_now(tz_name)
+        now = local_now(tz_name)
+        digest = await recent_digest(db, owner_id, now, since=utcnow() - timedelta(hours=20))
     system += ("\n\n## Фоновое задание\nСейчас ты работаешь в фоне, владелец не в чате. Выполни задание с помощью "
                "инструментов. Писать владельцу — только через message_user и только если это действительно полезно. "
                "В конце коротко опиши итог.")
     tools = tool_definitions(job.get("tools") or None, include_job_only=True)
     messages: list[dict[str, Any]] = [{"role": "user", "content": (
-        f"<context>Сейчас {now:%A %d.%m.%Y %H:%M}.</context>\nЗадание: {job['goal']}\n"
+        f"<context>Сейчас {now:%A %d.%m.%Y %H:%M}.\n{digest or ''}</context>\nЗадание: {job['goal']}\n"
         f"Почему запланировано: {job.get('reason') or '—'}")}]
     limit = Decimal(str(job.get("cost_limit_usd") or "0.05"))
     spent = Decimal(0)
