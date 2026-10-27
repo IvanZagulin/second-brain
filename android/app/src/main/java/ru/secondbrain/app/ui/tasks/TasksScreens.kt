@@ -2,14 +2,18 @@ package ru.secondbrain.app.ui.tasks
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -21,8 +25,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
 import kotlinx.serialization.json.jsonObject
 import ru.secondbrain.app.core.local
 import ru.secondbrain.app.core.nowIso
@@ -54,16 +63,13 @@ import ru.secondbrain.app.ui.components.LocalContainer
 import ru.secondbrain.app.ui.components.Markdown
 import ru.secondbrain.app.ui.components.Pill
 import ru.secondbrain.app.ui.components.Screen
-import ru.secondbrain.app.ui.components.SectionTitle
 import ru.secondbrain.app.ui.components.Secondary
+import ru.secondbrain.app.ui.components.SectionTitle
 import ru.secondbrain.app.ui.components.Sheet
 import ru.secondbrain.app.ui.components.TimeField
 import ru.secondbrain.app.ui.components.WeekStrip
 import ru.secondbrain.app.ui.components.rememberAction
 import ru.secondbrain.app.ui.theme.Tone
-import java.time.LocalDate
-import java.time.LocalTime
-import java.time.ZoneId
 
 @Composable
 fun TasksScreen() {
@@ -322,6 +328,8 @@ fun NotesScreen() {
     val act = rememberAction()
     val notes by c.store.observe(E.NOTES, Note.serializer()).collectAsState(initial = emptyList())
     var text by remember { mutableStateOf("") }
+    var open by remember { mutableStateOf<String?>(null) }
+    var confirm by remember { mutableStateOf<Note?>(null) }
     Screen("Заметки") {
         item {
             AppCard(tint = Tone.current.memory) {
@@ -330,12 +338,34 @@ fun NotesScreen() {
                 Secondary("Агент прочитает заметку и добавит важное в память.")
             }
         }
+        // Collapsed to a title and a few lines: under a long portrait the delete button was out of reach.
         items(notes.sortedByDescending { it.createdAt ?: "" }, key = { it.id }) { n ->
-            AppCard(padding = 12.dp) {
-                Text(n.text, style = MaterialTheme.typography.bodyLarge)
-                Label(relative(parseInstant(n.createdAt)))
-                TextButton(onClick = { act(null) { c.store.delete(E.NOTES, n.id) } }) { Text("Удалить") }
+            val expanded = open == n.id
+            AppCard(padding = 12.dp, onClick = { open = if (expanded) null else n.id }) {
+                Row(verticalAlignment = Alignment.Top) {
+                    Text(noteTitle(n), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(top = 10.dp),
+                        maxLines = if (expanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
+                    IconButton(onClick = { confirm = n }) { Icon(Icons.Outlined.DeleteOutline, "Удалить", tint = Tone.current.textSecondary) }
+                }
+                val body = n.text.trim().substringAfter("\n", "").trim()
+                if (body.isNotEmpty()) {
+                    if (expanded) Markdown(body)
+                    else Text(body, style = MaterialTheme.typography.bodyMedium, color = Tone.current.textSecondary,
+                        maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+                Label(listOfNotNull(relative(parseInstant(n.createdAt)), "нажмите, чтобы ${if (expanded) "свернуть" else "открыть"}"
+                    .takeIf { body.length > 200 }).joinToString(" · "))
             }
         }
     }
+    confirm?.let { n ->
+        AlertDialog(onDismissRequest = { confirm = null },
+            title = { Text("Удалить заметку?") },
+            text = { Text("«${noteTitle(n).take(80)}» удалится. Что агент уже выписал из неё в память, останется — это правится в «Памяти».") },
+            confirmButton = { TextButton(onClick = { act(null) { c.store.delete(E.NOTES, n.id) }; confirm = null }) { Text("Удалить") } },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Отмена") } })
+    }
 }
+
+/** First non-empty line without markdown heading marks. */
+fun noteTitle(n: Note): String = n.text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.trimStart('#')?.trim() ?: ""

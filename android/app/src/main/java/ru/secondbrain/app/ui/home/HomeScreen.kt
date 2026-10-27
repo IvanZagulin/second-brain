@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +63,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import java.time.LocalDate
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -84,11 +86,11 @@ import ru.secondbrain.app.data.model.Task
 import ru.secondbrain.app.data.repo.jsonOf
 import ru.secondbrain.app.data.repo.str
 import ru.secondbrain.app.ui.components.AppCard
+import ru.secondbrain.app.ui.components.ChoiceChips
 import ru.secondbrain.app.ui.components.Divider
 import ru.secondbrain.app.ui.components.EmptyState
 import ru.secondbrain.app.ui.components.Field
 import ru.secondbrain.app.ui.components.Gap
-import ru.secondbrain.app.ui.components.glueNumbers
 import ru.secondbrain.app.ui.components.Label
 import ru.secondbrain.app.ui.components.ListRow
 import ru.secondbrain.app.ui.components.LocalContainer
@@ -97,11 +99,12 @@ import ru.secondbrain.app.ui.components.Markdown
 import ru.secondbrain.app.ui.components.Screen
 import ru.secondbrain.app.ui.components.Secondary
 import ru.secondbrain.app.ui.components.Spark
+import ru.secondbrain.app.ui.components.glueNumbers
 import ru.secondbrain.app.ui.components.rememberAction
 import ru.secondbrain.app.ui.components.rememberLoad
+import ru.secondbrain.app.ui.tasks.noteTitle
 import ru.secondbrain.app.ui.theme.AgentProse
 import ru.secondbrain.app.ui.theme.Tone
-import java.time.LocalDate
 
 /** Kept so «Как пользоваться» can still be hidden from the menu once read. */
 val HelpDismissedKey = booleanPreferencesKey("help_dismissed")
@@ -348,7 +351,11 @@ fun PortraitScreen() {
     val notes by c.store.observe(E.NOTES, Note.serializer()).collectAsState(initial = emptyList())
     val memories by c.store.observe(E.MEMORIES, Memory.serializer()).collectAsState(initial = emptyList())
     val people by c.store.observe(E.PEOPLE, Person.serializer()).collectAsState(initial = emptyList())
-    val portrait = notes.filter { "портрет" in it.tags }.maxByOrNull { it.createdAt ?: "" }
+    val portraits = notes.filter { "портрет" in it.tags }.sortedByDescending { it.createdAt ?: "" }
+    var chosen by remember { mutableStateOf<String?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val portrait = portraits.firstOrNull { it.id == chosen } ?: portraits.firstOrNull()
     Screen("Что я о тебе знаю") {
         item {
             Secondary("${memories.size} воспоминаний · ${people.size} людей. Это взгляд по переписке и разговорам, " +
@@ -364,9 +371,26 @@ fun PortraitScreen() {
         if (portrait == null) item {
             EmptyState("Портрет появится, когда агент прочитает ваши архивы или узнает вас по разговорам.",
                 "Импорт архивов") { nav("memory/imports") }
-        } else item {
-            // The note's first line is its title; the screen already has one.
-            Markdown(portrait.text.substringAfter("\n").trim(), style = AgentProse)
+        } else {
+            // Each archive import writes its own portrait; pick one, and remove one that went wrong.
+            if (portraits.size > 1) item {
+                ChoiceChips(portraits.map { it.id to noteTitle(it).substringAfter(":").trim().let { t -> if (t.length > 34) t.take(32) + "…" else t } },
+                    portrait.id, { chosen = it })
+            }
+            item {
+                // The note's first line is its title; the screen already has one.
+                Markdown(portrait.text.substringAfter("\n").trim(), style = AgentProse)
+            }
+            item {
+                TextButton(onClick = { confirmDelete = true }) { Text("Удалить этот портрет", color = MaterialTheme.colorScheme.error) }
+            }
         }
     }
+    if (confirmDelete && portrait != null) AlertDialog(onDismissRequest = { confirmDelete = false },
+        title = { Text("Удалить портрет?") },
+        text = { Text("Текст портрета удалится. Воспоминания и карточки людей останутся — их можно поправить в «Памяти» и «Людях».") },
+        confirmButton = {
+            TextButton(onClick = { confirmDelete = false; chosen = null; scope.launch { c.store.delete(E.NOTES, portrait.id) } }) { Text("Удалить") }
+        },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } })
 }
