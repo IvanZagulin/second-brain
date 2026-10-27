@@ -75,6 +75,18 @@ async def _conv(db: AsyncSession, auth: Auth, conv_id: uuid.UUID) -> Conversatio
     return c
 
 
+async def _conv_or_create(db: AsyncSession, auth: Auth, conv_id: uuid.UUID, mode: str | None) -> Conversation:
+    """The phone opens a new conversation before the server knows it: the first message creates it."""
+    c = await db.get(Conversation, conv_id)
+    if c is None:
+        c = Conversation(id=conv_id, owner_id=auth.owner_id, title="Новый диалог",
+                         mode=mode if mode in MODES else "auto", last_message_at=utcnow())
+        db.add(c)
+        await db.flush()
+        return c
+    return await _conv(db, auth, conv_id)
+
+
 @router.patch("/conversations/{conv_id}")
 async def patch_conversation(conv_id: uuid.UUID, body: ConversationPatch, auth: Auth = Depends(get_auth),
                              db: AsyncSession = Depends(get_db)):
@@ -125,7 +137,7 @@ async def send(conv_id: uuid.UUID, body: SendIn, stream: bool = True, auth: Auth
                db: AsyncSession = Depends(get_db)):
     """Streams Server-Sent Events: start, delta, tool, done, error. The turn runs in a background task,
     so a dropped connection never loses the answer (it arrives with the next sync)."""
-    await _conv(db, auth, conv_id)
+    await _conv_or_create(db, auth, conv_id, body.mode)
     if not body.text.strip() and not body.attachment_ids:
         raise ApiError("Пустое сообщение")
     if body.mode and body.mode not in MODES:

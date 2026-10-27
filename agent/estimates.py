@@ -51,6 +51,10 @@ async def estimate_meal(owner_id: uuid.UUID, description: str | None, attachment
             if privacy.get("allow_image_analysis"):
                 image_block = {"type": "image", "source": {"type": "base64", "media_type": att.mime,
                                                            "data": base64.standard_b64encode(Path(att.path).read_bytes()).decode()}}
+            elif estimate and not (description or "").strip():
+                # Saving a photo with nothing to estimate from would silently record an empty meal.
+                raise ApiError("Распознавание еды по фото выключено (Настройки → Приватность → «Изображения»). "
+                               "Включите его или опишите блюдо словами.")
     parsed: dict[str, Any] | None = None
     if estimate and (description or image_block):
         content: list[dict] = []
