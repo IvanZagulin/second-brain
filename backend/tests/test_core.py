@@ -215,3 +215,47 @@ def test_exercise_catalog():
     for _, group, _, secondary in DEFAULT_EXERCISES:
         assert group in groups and set(secondary) <= groups
     assert {g for _, g, _, _ in DEFAULT_EXERCISES} >= {"back", "biceps", "shoulders", "chest", "triceps", "legs"}
+
+
+def test_telegram_html_and_claude_memory_imports(tmp_path):
+    import zipfile
+    from app.services.imports import adapters
+
+    page = """<div class="page_header"><div class="content"><div class="text bold">Аня</div></div></div>
+<div class="history">
+ <div class="message service" id="message-1"><div class="body details">29 марта 2021</div></div>
+ <div class="message default clearfix" id="message1"><div class="body">
+  <div class="pull_right date details" title="29.03.2021 12:53:11 GMT+03:00">12:53</div>
+  <div class="from_name">Аня</div><div class="text">Привет<br>как дела</div></div></div>
+ <div class="message default clearfix joined" id="message2"><div class="body">
+  <div class="pull_right date details" title="29.03.2021 12:53:20 UTC+03:00">12:53</div>
+  <div class="text">ты где?</div></div></div>
+ <div class="message default clearfix" id="message3"><div class="body">
+  <div class="pull_right date details" title="29.03.2021 12:54:00 GMT+03:00">12:54</div>
+  <div class="from_name">Иван</div><div class="media_wrap clearfix"><div class="title bold">Photo</div></div></div></div>
+</div>"""
+    page2 = """<div class="history"><div class="message default clearfix joined" id="message4"><div class="body">
+  <div class="pull_right date details" title="30.03.2021 09:00:00 GMT+03:00">09:00</div>
+  <div class="text">утро</div></div></div></div>"""
+    tg = tmp_path / "tg.zip"
+    with zipfile.ZipFile(tg, "w") as z:
+        z.writestr("ChatExport/messages2.html", page2)
+        z.writestr("ChatExport/messages.html", page)
+    assert adapters.detect(tg) == "telegram_html"
+    (chat,) = list(adapters.telegram_html_chats(tg))
+    msgs = list(chat.messages)
+    assert chat.title == "Аня" and [m.external_id for m in msgs] == ["1", "2", "4"]  # media-only message skipped
+    assert msgs[0].text == "Привет\nкак дела" and msgs[0].sent_at.isoformat() == "2021-03-29T12:53:11+03:00"
+    assert msgs[1].author == "Аня"  # joined message keeps the previous sender
+    assert msgs[2].author == "Иван" and msgs[2].author_id == "name:Иван"  # continues across pages
+
+    mem = tmp_path / "claude-memory.zip"
+    with zipfile.ZipFile(mem, "w") as z:
+        z.writestr("claude-memory/profile.md", "# Профиль\nЖивёт в Волгограде")
+        z.writestr("claude-memory/topics/pets.md", "Собака")
+        z.writestr("claude-memory/empty.md", "   ")
+    assert adapters.detect(mem) == "claude_memory"
+    (chat,) = list(adapters.claude_memory_chats(mem))
+    notes = list(chat.messages)
+    assert [n.external_id for n in notes] == ["profile.md", "topics/pets.md"]
+    assert notes[0].text.startswith("[Заметка памяти Claude: profile.md]") and notes[0].is_self is False

@@ -44,6 +44,10 @@ async def parse_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, Any]
             chats = adapters.claude_chats(path)
         elif kind == "gemini":
             chats = adapters.gemini_chats(path)
+        elif kind == "telegram_html":
+            chats = adapters.telegram_html_chats(path)
+        elif kind == "claude_memory":
+            chats = adapters.claude_memory_chats(path)
         else:
             raise adapters.UnknownFormat(f"Неизвестный тип импорта {kind}")
 

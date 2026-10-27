@@ -6,7 +6,9 @@ Supported:
   ("chats.list"), plain or zipped;
 * ChatGPT data export (zip with conversations.json, tree "mapping");
 * Claude data export (zip/json with "chat_messages");
-* Gemini via Google Takeout (My Activity/Gemini Apps/MyActivity.json).
+* Gemini via Google Takeout (My Activity/Gemini Apps/MyActivity.json);
+* Telegram Desktop HTML export of one chat (messages.html, messages2.html, … zipped);
+* Claude memory export (zip of Markdown notes: profile.md, preferences.md, areas/, projects/, topics/).
 
 When an export format changes only the matching adapter needs updating."""
 
@@ -18,8 +20,9 @@ import json
 import re
 import zipfile
 from collections.abc import Iterator
+from html.parser import HTMLParser
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import IO, Any
 
@@ -91,6 +94,10 @@ def detect(path: Path) -> str:
                 with zf.open(conv) as f:
                     head = f.read(200_000).decode("utf-8", errors="ignore")
                 return "claude" if "chat_messages" in head else "chatgpt"
+            if any(n.rsplit("/", 1)[-1] == "messages.html" for n in names):
+                return "telegram_html"
+            if any(n.rsplit("/", 1)[-1] in ("profile.md", "preferences.md") for n in names):
+                return "claude_memory"
         raise UnknownFormat("В архиве не найден известный формат экспорта")
     with path.open("rb") as f:
         head = f.read(200_000).decode("utf-8", errors="ignore")
@@ -263,3 +270,164 @@ def gemini_chats(path: Path) -> Iterator[ParsedChat]:
                                           text=re.sub(r"\s+", " ", answer)[:20000], is_self=False))
     f.close()
     yield ParsedChat("gemini", "gemini:activity", "Gemini", "ai", iter(msgs))
+
+
+# ------------------------------------------------------------------ Telegram (HTML export)
+
+_TG_DATE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2}):(\d{2})(?:\s*(?:UTC|GMT)([+-])(\d{1,2}):?(\d{2}))?")
+
+
+def _tg_html_date(title: str | None) -> datetime | None:
+    m = _TG_DATE.search(title or "")
+    if not m:
+        return None
+    d, mo, y, h, mi, s, sign, oh, om = m.groups()
+    tz = timezone.utc
+    if sign:
+        off = timedelta(hours=int(oh), minutes=int(om))
+        tz = timezone(off if sign == "+" else -off)
+    return datetime(int(y), int(mo), int(d), int(h), int(mi), int(s), tzinfo=tz)
+
+
+class _TgHtmlPage(HTMLParser):
+    """One messagesN.html page → messages. Text only: media blocks are ignored, service messages skipped."""
+
+    def __init__(self, last_author: str | None) -> None:
+        super().__init__(convert_charrefs=True)
+        self.out: list[ParsedMessage] = []
+        self.last_author = last_author
+        self.title: str | None = None
+        self._stack: list[set[str]] = []
+        self._msg: dict[str, Any] | None = None
+        self._msg_depth = 0
+        self._capture: str | None = None  # "from" | "text" | "title"
+        self._capture_depth = 0
+        self._buf: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "br" and self._capture == "text":
+            self._buf.append("\n")
+            return
+        if tag != "div":
+            return
+        a = dict(attrs)
+        classes = set((a.get("class") or "").split())
+        self._stack.append(classes)
+        depth = len(self._stack)
+        if {"message", "default"} <= classes:
+            self._msg = {"id": (a.get("id") or "").removeprefix("message"), "joined": "joined" in classes,
+                         "author": None, "date": None, "text": [], "forwarded": False}
+            self._msg_depth = depth
+            return
+        if self._capture is None and self.title is None and classes == {"text", "bold"} and \
+                any("page_header" in c for c in self._stack[:-1]):
+            self._capture, self._capture_depth, self._buf = "title", depth, []
+            return
+        if self._msg is None:
+            return
+        if "forwarded" in classes:
+            self._msg["forwarded"] = True
+        if "date" in classes and "details" in classes and self._msg["date"] is None:
+            self._msg["date"] = _tg_html_date(a.get("title"))
+        elif "from_name" in classes and self._capture is None:
+            self._capture, self._capture_depth, self._buf = "from", depth, []
+        elif classes == {"text"} and self._capture is None:
+            self._capture, self._capture_depth, self._buf = "text", depth, []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "div" or not self._stack:
+            return
+        depth = len(self._stack)
+        if self._capture and depth == self._capture_depth:
+            value = "".join(self._buf).strip()
+            if self._capture == "title":
+                self.title = value or None
+            elif self._capture == "from" and self._msg is not None:
+                # A from_name inside a forwarded block names the original author, not the sender.
+                if not self._msg["forwarded"] and self._msg["author"] is None:
+                    self._msg["author"] = value.split("\n")[0].strip() or None
+            elif self._capture == "text" and self._msg is not None and value:
+                self._msg["text"].append(value)
+            self._capture = None
+        if self._msg is not None and depth == self._msg_depth:
+            m = self._msg
+            self._msg = None
+            # "joined" messages continue the previous sender and carry no from_name.
+            author = m["author"] or self.last_author
+            if m["author"]:
+                self.last_author = m["author"]
+            text = "\n".join(m["text"]).strip()
+            if text and m["id"]:
+                self.out.append(ParsedMessage(external_id=m["id"], author=author,
+                                              author_id=f"name:{author}" if author else None,
+                                              sent_at=m["date"], text=text))
+        self._stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        if self._capture:
+            self._buf.append(data)
+
+
+def _page_no(name: str) -> int:
+    m = re.search(r"messages(\d*)\.html$", name)
+    return int(m.group(1) or 1) if m else 10**9
+
+
+def _tg_html_page(zf: zipfile.ZipFile, name: str, last_author: str | None) -> _TgHtmlPage:
+    page = _TgHtmlPage(last_author)
+    with zf.open(name) as f:
+        page.feed(f.read().decode("utf-8", errors="replace"))
+    page.close()
+    return page
+
+
+def telegram_html_chats(path: Path) -> Iterator[ParsedChat]:
+    """A single-chat HTML export. Pages are read in order and streamed, so huge chats stay cheap on memory.
+    Authors carry no ids in HTML, so participants are keyed by name; the owner picks which name is theirs."""
+    zf = zipfile.ZipFile(path)
+    pages = sorted((n for n in zf.namelist() if re.search(r"(^|/)messages\d*\.html$", n)), key=_page_no)
+    if not pages:
+        raise UnknownFormat("В архиве нет messages.html")
+    first = _tg_html_page(zf, pages[0], None)
+    title = first.title or "Чат Telegram"
+
+    def messages() -> Iterator[ParsedMessage]:
+        yield from first.out
+        last = first.last_author
+        for name in pages[1:]:
+            page = _tg_html_page(zf, name, last)
+            last = page.last_author
+            yield from page.out
+        zf.close()
+
+    yield ParsedChat("telegram", f"tg:html:{title}", title, "personal_chat", messages(), {"format": "html"})
+
+
+# ------------------------------------------------------------------ Claude memory export
+
+def _zip_name(info: zipfile.ZipInfo) -> str:
+    """Archivers that do not set the UTF-8 flag make zipfile decode names as cp437."""
+    if info.flag_bits & 0x800:
+        return info.filename
+    try:
+        return info.filename.encode("cp437").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return info.filename
+
+
+def claude_memory_chats(path: Path) -> Iterator[ParsedChat]:
+    """Claude's memory export is already a digest about the owner: each note becomes one fragment to analyse."""
+    with zipfile.ZipFile(path) as zf:
+        msgs = []
+        for info in sorted(zf.infolist(), key=_zip_name):
+            name = _zip_name(info)
+            if info.is_dir() or not name.lower().endswith(".md"):
+                continue
+            text = zf.read(info).decode("utf-8", errors="replace").strip()
+            if not text:
+                continue
+            rel = name.split("/", 1)[1] if "/" in name else name
+            msgs.append(ParsedMessage(external_id=rel, author="Claude (память)", author_id="claude_memory",
+                                      sent_at=datetime(*info.date_time, tzinfo=timezone.utc),
+                                      text=f"[Заметка памяти Claude: {rel}]\n{text}", is_self=False))
+    yield ParsedChat("claude", "claude:memory-export", "Память Claude", "ai", iter(msgs), {"format": "memory"})
