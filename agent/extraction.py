@@ -14,7 +14,7 @@ from app.core.db import session_scope
 from app.core.timeutil import tz, utcnow
 from app.models import ClarifyingQuestion, Conversation, LifeEvent, MemoryLink, Message, MoodEntry, Person, Task, User
 from app.services.llm.client import call_json
-from app.services.memory import format_memories, search_memories, upsert_memory
+from app.services.memory import find_person, format_memories, search_memories, upsert_memory
 
 log = logging.getLogger(__name__)
 
@@ -138,20 +138,16 @@ async def save_extraction(owner_id: uuid.UUID, parsed: dict[str, Any], *, tz_nam
     async with session_scope() as db:
         people_ids: dict[str, uuid.UUID] = {}
 
-        async def person_id(name: str) -> uuid.UUID:
+        async def person_id(name: str) -> uuid.UUID | None:
+            # Only cards the owner keeps: someone new stays a name inside the memory text until the owner asks
+            # the agent to remember them (upsert_person). Auto-created cards grew into a hundred duplicates.
             key = name.strip().lower()
-            if key in people_ids:
-                return people_ids[key]
-            p = (await db.execute(select(Person).where(Person.owner_id == owner_id, Person.deleted_at.is_(None),
-                                                       Person.name.ilike(name.strip())))).scalars().first()
-            if p is None:
-                p = Person(owner_id=owner_id, name=name.strip()[:120], source_id=source_id)
-                db.add(p)
-                await db.flush()
-                stats["people"] += 1
-            p.last_mentioned_at = utcnow()
-            people_ids[key] = p.id
-            return p.id
+            if key not in people_ids:
+                p = await find_person(db, owner_id, name)
+                if p is not None:
+                    p.last_mentioned_at = utcnow()
+                people_ids[key] = p.id if p else None
+            return people_ids[key]
 
         for f in parsed.get("facts", []):
             if not f.get("content"):
@@ -165,10 +161,13 @@ async def save_extraction(owner_id: uuid.UUID, parsed: dict[str, Any], *, tz_nam
             stats["facts"] += int(created)
             for name in f.get("people") or []:
                 pid = await person_id(name)
-                db.add(MemoryLink(owner_id=owner_id, memory_id=mem.id, entity_type="person", entity_id=str(pid)))
+                if pid is not None:
+                    db.add(MemoryLink(owner_id=owner_id, memory_id=mem.id, entity_type="person", entity_id=str(pid)))
 
         for p in parsed.get("people", []):
             pid = await person_id(p["name"])
+            if pid is None:
+                continue
             person = await db.get(Person, pid)
             if p.get("relation") and not person.relation:
                 person.relation = p["relation"]
@@ -179,7 +178,7 @@ async def save_extraction(owner_id: uuid.UUID, parsed: dict[str, Any], *, tz_nam
                 person.unresolved = [*person.unresolved, p["unresolved"]]
 
         for e in parsed.get("events", []):
-            ids = [str(await person_id(n)) for n in e.get("people") or []]
+            ids = [str(pid) for n in e.get("people") or [] if (pid := await person_id(n)) is not None]
             db.add(LifeEvent(owner_id=owner_id, title=e["title"][:300], description=e.get("description"),
                              occurred_at=_parse_date(e.get("date"), tz_name), kind=e.get("kind") or "event",
                              sentiment=e.get("sentiment"), people=ids, evidence=default_evidence, source_id=source_id))

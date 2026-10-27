@@ -20,14 +20,15 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import fmt_rub, to_minor
-from app.core.timeutil import local_now, tz, utcnow
+from app.core.timeutil import local_day_bounds, local_now, parse_hhmm, tz, utcnow
 from app.models import (
-    AgentAction, AgentJob, BodyMetric, BudgetCategory, Debt, Exercise, FinancialGoal, LifeEvent, Memory,
-    MemoryLink, MoodEntry, Person, PlanExercise, PlanRevision, Task, Transaction, Workout, WorkoutPlan, WorkoutSet,
+    AgentAction, AgentJob, BodyMetric, BudgetCategory, Debt, Exercise, FinancialGoal, Habit, HabitLog, LifeEvent,
+    Memory, MemoryEmbedding, MemoryLink, MoodEntry, Person, PlanExercise, PlanRevision, Task, Transaction, Workout,
+    WorkoutPlan, WorkoutSet,
 )
 from app.services import memory as memsvc
 from app.services.crud import serialize
@@ -285,6 +286,9 @@ async def _update_memory(ctx: ToolCtx, a: UpdateMemoryIn) -> dict:
     before = {k: getattr(mem, k) for k in ("content", "status", "is_actual", "importance")}
     for k, v in a.model_dump(exclude_none=True, exclude={"id"}).items():
         setattr(mem, k, v)
+    if a.content is not None and a.content != before["content"]:
+        # Otherwise search keeps finding it by the old meaning; the worker embeds it again.
+        await ctx.db.execute(delete(MemoryEmbedding).where(MemoryEmbedding.memory_id == mem.id))
     mem.version += 1
     return {"ok": True, "_rollback": {"table": "memories", "id": str(mem.id), "values": before}}
 
@@ -318,6 +322,8 @@ async def _get_person(ctx: ToolCtx, a: PersonIn) -> dict:
 
 
 async def _find_person(ctx: ToolCtx, name: str) -> Person | None:
+    if (p := await memsvc.find_person(ctx.db, ctx.owner_id, name)) is not None:
+        return p
     rows = (await ctx.db.execute(
         select(Person).where(Person.owner_id == ctx.owner_id, Person.deleted_at.is_(None),
                              or_(Person.name.ilike(f"%{name}%"), Person.aliases.contains([name])))
@@ -367,12 +373,9 @@ class LifeEventIn(BaseModel):
 async def _add_life_event(ctx: ToolCtx, a: LifeEventIn) -> dict:
     ids = []
     for name in a.people:
-        p = await _find_person(ctx, name)
-        if p is None:
-            p = Person(owner_id=ctx.owner_id, name=name)
-            ctx.db.add(p)
-            await ctx.db.flush()
-        ids.append(str(p.id))
+        # Participants link to cards the owner keeps; a new card only through upsert_person.
+        if (p := await _find_person(ctx, name)) is not None:
+            ids.append(str(p.id))
     ev = LifeEvent(owner_id=ctx.owner_id, title=a.title, description=a.description,
                    occurred_at=_parse_when(a.occurred_at, ctx.tz_name) or utcnow(), kind=a.kind,
                    sentiment=a.sentiment, people=ids,
@@ -721,7 +724,7 @@ async def _workout_overview(ctx: ToolCtx, a: DaysIn) -> dict:
         items.append({"date": w.started_at.astimezone(tz(ctx.tz_name)).strftime("%a %d.%m"),
                       "plan": plan_names.get(w.plan_id), "status": w.status, "minutes": minutes,
                       "sets": sets[0], "volume_kg": float(sets[1] or 0), "feeling": w.feeling,
-                      "pain": w.pain_note})
+                      "pain": w.pain_note, "skip_reason": w.skip_reason})
     fit = await get_setting(ctx.db, ctx.owner_id, "fitness")
     return {"workouts": items, "plans": [{"id": str(p.id), "name": p.name, "weekday": p.weekday,
                                           "groups": p.muscle_groups} for p in plans],
@@ -833,6 +836,154 @@ async def _update_plan(ctx: ToolCtx, a: PlanChangeIn) -> dict:
             item.version += 1
     await ctx.db.flush()
     return {"ok": True, "plan": plan.name, "_rollback": {"plan_revision_id": str(revision.id)}}
+
+
+class MarkWorkoutIn(BaseModel):
+    status: Literal["skipped", "done"] = Field(description="skipped — не пошёл, done — сходил (без записи подходов)")
+    day: str | None = Field(None, description="YYYY-MM-DD; по умолчанию сегодня")
+    reason: str | None = Field(None, description="Почему пропустил, со слов владельца: болел, не успел…")
+    feeling: int | None = Field(None, ge=1, le=10)
+    notes: str | None = None
+
+
+@tool("mark_workout", "Отметить тренировку за день без подходов: пропустил (с причиной) или сходил. Когда владелец "
+      "пишет «сегодня не пошёл, заболел» или «сходил в зал», отметь сам, не отправляй его в приложение.",
+      MarkWorkoutIn, writes=True, domain="fitness",
+      title=lambda a: "Тренировка пропущена" if a.status == "skipped" else "Тренировка отмечена")
+async def _mark_workout(ctx: ToolCtx, a: MarkWorkoutIn) -> dict:
+    day = (_parse_when(a.day, ctx.tz_name) or local_now(ctx.tz_name)).date()
+    start, end = local_day_bounds(day, ctx.tz_name)
+    w = (await ctx.db.execute(select(Workout).where(
+        Workout.owner_id == ctx.owner_id, Workout.deleted_at.is_(None), Workout.started_at >= start,
+        Workout.started_at < end).order_by(Workout.started_at.desc()))).scalars().first()
+    if w is None:
+        plan = (await ctx.db.execute(select(WorkoutPlan).where(
+            WorkoutPlan.owner_id == ctx.owner_id, WorkoutPlan.deleted_at.is_(None), WorkoutPlan.is_active.is_(True),
+            WorkoutPlan.weekday == day.isoweekday()))).scalars().first()
+        fit = await get_setting(ctx.db, ctx.owner_id, "fitness")
+        at = datetime.combine(day, parse_hhmm(fit.get("training_time"), "19:00"), tzinfo=tz(ctx.tz_name))
+        w = Workout(owner_id=ctx.owner_id, plan_id=plan.id if plan else None, started_at=at)
+        ctx.db.add(w)
+    elif w.status == "done" and a.status == "skipped":
+        raise ToolError("За этот день уже записана выполненная тренировка")
+    w.status = a.status
+    if a.status == "skipped" and a.reason:
+        w.skip_reason = a.reason
+    if a.feeling is not None:
+        w.feeling = a.feeling
+    if a.notes:
+        w.notes = a.notes
+    if w.version:
+        w.version += 1
+    await ctx.db.flush()
+    return {"ok": True, "id": str(w.id), "date": day.isoformat(), "status": w.status}
+
+
+# =============================================================== habits
+
+class HabitIn(BaseModel):
+    name: str = Field(description="Коротко, что держим: «Не курить», «Вода 2 л», «Зарядка»")
+    action: Literal["create", "update", "stop"] = "create"
+    kind: Literal["good", "bad"] | None = Field(None, description="good — делать, bad — отказаться (курение, сладкое)")
+    schedule: str | None = Field(None, description="daily | weekdays | weekly:1,3,5")
+    target_value: float | None = Field(None, description="Например 2 для «2 л воды»")
+    unit: str | None = None
+    notes: str | None = Field(None, description="Зачем и с чего начинаем, со слов владельца")
+
+
+async def _find_habit(ctx: ToolCtx, name: str) -> Habit | None:
+    rows = (await ctx.db.execute(select(Habit).where(Habit.owner_id == ctx.owner_id, Habit.deleted_at.is_(None))
+                                 .order_by(Habit.is_active.desc(), Habit.created_at.desc()))).scalars().all()
+    key = name.strip().lower()
+    exact = next((h for h in rows if h.name.strip().lower() == key), None)
+    return exact or next((h for h in rows if key in h.name.lower() or h.name.lower() in key), None)
+
+
+@tool("manage_habit", "Завести, изменить или остановить привычку (раздел «Привычки»). Когда владелец говорит «хочу "
+      "бросить курить», «буду пить воду», «начну делать зарядку», заведи привычку сам и скажи, как её отмечать.",
+      HabitIn, writes=True, domain="tasks", title=lambda a: f"Привычка «{a.name}»")
+async def _manage_habit(ctx: ToolCtx, a: HabitIn) -> dict:
+    h = await _find_habit(ctx, a.name)
+    if h is None:
+        if a.action != "create":
+            raise ToolError("Привычка не найдена")
+        h = Habit(owner_id=ctx.owner_id, name=a.name.strip()[:120], kind=a.kind or "good",
+                  schedule=a.schedule or "daily")
+        ctx.db.add(h)
+    elif a.action == "stop":
+        h.is_active = False
+    else:
+        h.is_active = True
+        if a.kind:
+            h.kind = a.kind
+        if a.schedule:
+            h.schedule = a.schedule
+    if a.action != "stop":
+        if a.target_value is not None:
+            h.target_value = Decimal(str(a.target_value))
+        if a.unit:
+            h.unit = a.unit
+        if a.notes:
+            h.notes = a.notes
+    if h.version:
+        h.version += 1
+    await ctx.db.flush()
+    return {"ok": True, "id": str(h.id), "name": h.name, "kind": h.kind, "active": h.is_active is not False}
+
+
+class HabitLogIn(BaseModel):
+    habit: str
+    day: str | None = Field(None, description="YYYY-MM-DD; по умолчанию сегодня")
+    done: bool = Field(True, description="true — сделал (для отказа: удержался); false — снять отметку: сорвался "
+                                         "или не сделал")
+    value: float | None = None
+    note: str | None = None
+
+
+@tool("log_habit", "Отметить привычку за день. У привычки-отказа отметка значит «удержался», срыв — done=false.",
+      HabitLogIn, writes=True, domain="tasks", title=lambda a: f"Отметка «{a.habit}»")
+async def _log_habit(ctx: ToolCtx, a: HabitLogIn) -> dict:
+    h = await _find_habit(ctx, a.habit)
+    if h is None:
+        raise ToolError("Привычка не найдена: сначала заведи её через manage_habit")
+    day = (_parse_when(a.day, ctx.tz_name) or local_now(ctx.tz_name)).date()
+    log = (await ctx.db.execute(select(HabitLog).where(HabitLog.habit_id == h.id,
+                                                       HabitLog.day == day))).scalars().first()
+    if a.done:
+        if log is None:
+            log = HabitLog(owner_id=ctx.owner_id, habit_id=h.id, day=day)
+            ctx.db.add(log)
+        log.deleted_at = None
+        if a.value is not None:
+            log.value = Decimal(str(a.value))
+        if a.note:
+            log.note = a.note
+    elif log is not None:
+        log.deleted_at = utcnow()
+    if log is not None and log.version:
+        log.version += 1
+    await ctx.db.flush()
+    return {"ok": True, "habit": h.name, "day": day.isoformat(), "done": a.done}
+
+
+@tool("list_habits", "Привычки владельца, отметки за две недели и текущая серия.", EmptyIn, domain="tasks")
+async def _list_habits(ctx: ToolCtx, a: EmptyIn) -> dict:
+    today = local_now(ctx.tz_name).date()
+    habits = (await ctx.db.execute(select(Habit).where(Habit.owner_id == ctx.owner_id, Habit.deleted_at.is_(None),
+                                                       Habit.is_active.is_(True)))).scalars().all()
+    out = []
+    for h in habits:
+        days = set((await ctx.db.execute(select(HabitLog.day).where(
+            HabitLog.habit_id == h.id, HabitLog.deleted_at.is_(None),
+            HabitLog.day > today - timedelta(days=60)))).scalars())
+        streak, d = 0, today if today in days else today - timedelta(days=1)
+        while d in days:
+            streak, d = streak + 1, d - timedelta(days=1)
+        out.append({"name": h.name, "kind": h.kind, "schedule": h.schedule, "notes": h.notes,
+                    "target": f"{h.target_value:g} {h.unit or ''}".strip() if h.target_value is not None else None,
+                    "done_last_14_days": sorted(x.isoformat() for x in days if x > today - timedelta(days=14)),
+                    "streak_days": streak})
+    return {"habits": out}
 
 
 # =============================================================== tasks & agent jobs

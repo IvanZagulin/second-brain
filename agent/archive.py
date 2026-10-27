@@ -32,7 +32,7 @@ from app.core.errors import BudgetExceeded
 from app.core.timeutil import tz, utcnow
 from app.models import ClarifyingQuestion, ImportChat, ImportJob, ImportMessage, Memory, MemorySource, Note, Person, User
 from app.services.llm.client import call_json
-from app.services.memory import format_memories, search_memories
+from app.services.memory import find_person, format_memories, search_memories
 from app.services.settings import set_setting
 
 log = logging.getLogger(__name__)
@@ -449,15 +449,20 @@ async def build_portrait(owner_id: uuid.UUID, job_id: uuid.UUID, chronicles: lis
         for p in parsed.get("people") or []:
             if not p.get("name"):
                 continue
-            person = (await db.execute(select(Person).where(Person.owner_id == owner_id, Person.deleted_at.is_(None),
-                                                            Person.name.ilike(p["name"].strip())))).scalars().first()
+            rel = stories.get(p["name"].strip().lower())
+            person = await find_person(db, owner_id, p["name"])
             if person is None:
+                # New cards only for the key relationships, and never for someone the owner already removed.
+                removed = (await db.execute(select(Person.id).where(
+                    Person.owner_id == owner_id, Person.deleted_at.is_not(None),
+                    Person.name.ilike(p["name"].strip())).limit(1))).scalar_one_or_none()
+                if rel is None or removed is not None:
+                    continue
                 person = Person(owner_id=owner_id, name=p["name"].strip()[:120],
                                 source_id=uuid.UUID(sid) if sid else None)
                 db.add(person)
             if p.get("relation") and not person.relation:
                 person.relation = p["relation"][:200]
-            rel = stories.get(p["name"].strip().lower())
             person.description = "\n\n".join(x for x in (
                 p.get("summary"), p.get("portrait"),
                 f"## История отношений\n{rel['story']}" if rel else None,

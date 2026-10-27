@@ -13,7 +13,7 @@ from app.core.deps import Auth, get_auth
 from app.core.errors import ApiError, NotFound
 from app.core.timeutil import utcnow
 from app.models import (
-    ClarifyingQuestion, ImportMessage, LifeEvent, Memory, MemorySource, Message, MoodEntry, Person,
+    AgentJob, ClarifyingQuestion, ImportMessage, LifeEvent, Memory, MemorySource, Message, MoodEntry, Person,
 )
 from app.services.audit import audit
 from app.services.crud import crud_router, serialize
@@ -223,7 +223,21 @@ async def answer(qid: uuid.UUID, body: AnswerIn, auth: Auth = Depends(get_auth),
                                  content=f"{q.question.rstrip('?')}? — {body.answer}", source_kind="manual",
                                  status="confirmed", confidence=1.0, importance=4,
                                  evidence=[{"kind": "question", "id": str(q.id)}])
+    # The answer alone used to sit next to the memories it contradicts (a boss's trip kept being the owner's):
+    # the agent goes through the related ones in the background and corrects them.
+    db.add(AgentJob(owner_id=auth.owner_id, kind="followup", goal=CORRECT_GOAL.format(q=q.question, a=body.answer),
+                    reason="Ответ на уточняющий вопрос", next_run_at=utcnow(), priority=1, created_by="system",
+                    tools=["search_memory", "update_memory", "get_person", "upsert_person"],
+                    payload={"question_id": str(q.id), "memory_id": str(mem.id)}, max_attempts=2))
     return {"ok": True, "memory_id": str(mem.id)}
+
+
+CORRECT_GOAL = (
+    "Владелец ответил на уточняющий вопрос.\nВопрос: «{q}»\nОтвет: «{a}»\n"
+    "Найди через search_memory (2–3 поиска по ключевым словам вопроса и ответа) воспоминания, которые этот ответ "
+    "опровергает или уточняет, и исправь их через update_memory: перепиши текст так, чтобы он был верным, или пометь "
+    "неактуальным (is_actual=false). Запись с самим ответом не трогай. Если ответ касается человека из окружения, "
+    "уточни его карточку (get_person, upsert_person). Владельцу ничего не пиши. Если исправлять нечего, ничего не делай.")
 
 
 @router.post("/questions/{qid}/dismiss")

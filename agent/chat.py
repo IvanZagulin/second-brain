@@ -365,7 +365,7 @@ TOOL_LABELS = {
     "list_transactions": "Смотрю операции", "spending_breakdown": "Считаю траты", "list_obligations": "Смотрю платежи",
     "list_goals": "Смотрю цели", "evaluate_purchase": "Оцениваю покупку", "workout_overview": "Смотрю тренировки",
     "exercise_progress": "Смотрю прогресс", "body_metrics": "Смотрю замеры", "list_tasks": "Смотрю задачи",
-    "get_person": "Вспоминаю человека", "list_followups": "Смотрю планы",
+    "get_person": "Вспоминаю человека", "list_followups": "Смотрю планы", "list_habits": "Смотрю привычки",
 }
 
 

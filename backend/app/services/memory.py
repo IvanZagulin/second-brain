@@ -13,7 +13,7 @@ from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.timeutil import utcnow
-from app.models import Memory, MemorySource
+from app.models import Memory, MemorySource, Person
 from app.services.embeddings import embed, to_pgvector
 from app.services.queue import enqueue
 from app.services.settings import get_setting
@@ -178,6 +178,19 @@ async def delete_source(db: AsyncSession, owner_id: uuid.UUID, source_id: uuid.U
         select(func.count()).select_from(Memory).where(Memory.source_id == source_id))).scalar_one()
     await db.execute(delete(MemorySource).where(MemorySource.id == source_id, MemorySource.owner_id == owner_id))
     return {"derived_deleted": int(derived), "evidence_pruned": pruned, "orphans_deleted": removed}
+
+
+async def find_person(db: AsyncSession, owner_id: uuid.UUID, name: str) -> Person | None:
+    """A card by its name or one of its aliases, ignoring case. The list is short and kept by hand
+    (the owner removes whoever doesn't matter), so a strict match beats creating near-duplicates."""
+    key = name.strip().lower()
+    if not key:
+        return None
+    for p in (await db.execute(select(Person).where(Person.owner_id == owner_id, Person.deleted_at.is_(None))
+                               .order_by(Person.importance.desc()))).scalars():
+        if p.name.strip().lower() == key or key in (str(a).strip().lower() for a in p.aliases or []):
+            return p
+    return None
 
 
 def format_memories(items: list[tuple[Memory, float]] | list[Memory]) -> str:
