@@ -40,8 +40,10 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -115,8 +117,13 @@ fun ConversationsScreen() {
     val nav = LocalNavigate.current
     val scope = rememberCoroutineScope()
     val convs by c.store.observe(E.CONVERSATIONS, Conversation.serializer()).collectAsState(initial = emptyList())
+    val messages by c.store.observe(E.MESSAGES, Message.serializer()).collectAsState(initial = null)
     var showArchived by remember { mutableStateOf(false) }
-    val list = convs.filter { it.archived == showArchived }
+    var confirmDelete by remember { mutableStateOf<Conversation?>(null) }
+    // A conversation opened and left without a word: hidden, and removable in one tap.
+    val withMessages = remember(messages) { messages?.mapTo(HashSet()) { it.conversationId } }
+    val empty = if (withMessages == null) emptyList() else convs.filter { it.kind == "chat" && it.id !in withMessages }
+    val list = convs.filter { it.archived == showArchived && it !in empty }
         .sortedWith(compareByDescending<Conversation> { it.pinned || it.kind == "agent" }.thenByDescending { it.lastMessageAt ?: "" })
     Screen("Диалоги", onRefresh = { c.sync.syncNow() },
         actions = { TextButton(onClick = { showArchived = !showArchived }) { Text(if (showArchived) "Активные" else "Архив") } },
@@ -138,9 +145,46 @@ fun ConversationsScreen() {
                     Text((if (conv.kind == "agent") "Агент пишет первым" else conv.title), style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (conv.mode != "auto") Pill(CHAT_MODES[conv.mode] ?: conv.mode)
+                    if (conv.kind != "agent") ConversationMenu(conv, onDelete = { confirmDelete = conv })
                 }
                 Secondary(relative(parseInstant(conv.lastMessageAt)))
             }
+        }
+        if (empty.isNotEmpty() && !showArchived) item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Secondary("Пустых диалогов: ${empty.size}", Modifier.weight(1f))
+                TextButton(onClick = { scope.launch { empty.forEach { c.store.delete(E.CONVERSATIONS, it.id) } } }) { Text("Убрать") }
+            }
+        }
+    }
+    confirmDelete?.let { conv ->
+        AlertDialog(onDismissRequest = { confirmDelete = null },
+            title = { Text("Удалить диалог?") },
+            text = { Text("«${conv.title}» пропадёт из списка. То, что агент уже запомнил из него, останется в памяти.") },
+            confirmButton = {
+                TextButton(onClick = { scope.launch { c.store.delete(E.CONVERSATIONS, conv.id) }; confirmDelete = null }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Отмена") } })
+    }
+}
+
+@Composable
+private fun ConversationMenu(conv: Conversation, onDelete: () -> Unit) {
+    val c = LocalContainer.current
+    val scope = rememberCoroutineScope()
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Outlined.MoreVert, "Действия", tint = Tone.current.textSecondary)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            fun set(field: String, value: Boolean) {
+                open = false
+                scope.launch { c.store.save(E.CONVERSATIONS, jsonOf(field to value), conv.id) }
+            }
+            DropdownMenuItem(text = { Text(if (conv.pinned) "Открепить" else "Закрепить") }, onClick = { set("pinned", !conv.pinned) })
+            DropdownMenuItem(text = { Text(if (conv.archived) "Вернуть из архива" else "В архив") }, onClick = { set("archived", !conv.archived) })
+            DropdownMenuItem(text = { Text("Удалить", color = MaterialTheme.colorScheme.error) }, onClick = { open = false; onDelete() })
         }
     }
 }

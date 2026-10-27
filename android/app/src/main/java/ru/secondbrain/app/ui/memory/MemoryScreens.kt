@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Help
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Source
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -246,7 +247,7 @@ fun PeopleScreen() {
     var adding by remember { mutableStateOf(false) }
     Screen("Люди", fab = { ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Человек") }) }) {
         item { Secondary("Карточки — это ваш взгляд и наблюдения агента, а не объективные характеристики людей.") }
-        if (people.isEmpty()) item { EmptyState("Пока никого. Люди появятся из разговоров и импортов.") }
+        if (people.isEmpty()) item { EmptyState("Пока никого. Скажите агенту «запомни, Петя — мой брат» или добавьте сами.") }
         items(people.sortedWith(compareByDescending<Person> { it.importance }.thenByDescending { it.lastMentionedAt ?: "" }), key = { it.id }) { p ->
             AppCard(padding = 12.dp, onClick = { nav("memory/person/${p.id}") }) {
                 ListRow(p.name, listOfNotNull(p.relation, p.lastMentionedAt?.let { "упоминался ${relative(parseInstant(it))}" },
@@ -277,6 +278,8 @@ fun PersonScreen(id: String) {
     var relation by remember(p.id) { mutableStateOf(p.relation ?: "") }
     var description by remember(p.id) { mutableStateOf(p.description ?: "") }
     var issue by remember { mutableStateOf("") }
+    var confirmRemove by remember { mutableStateOf(false) }
+    val back = LocalBack.current
     Screen(p.name, subtitle = p.relation) {
         item {
             AppCard(tint = Tone.current.memory) {
@@ -329,7 +332,19 @@ fun PersonScreen(id: String) {
                 related.forEach { e -> ListRow(e.title, listOfNotNull(e.kind.takeIf { it != "event" }, relative(parseInstant(e.occurredAt))).joinToString(" · ")) }
             }
         }
+        item {
+            TextButton(onClick = { confirmRemove = true }) {
+                Text("Убрать из окружения", color = MaterialTheme.colorScheme.error)
+            }
+        }
     }
+    if (confirmRemove) AlertDialog(onDismissRequest = { confirmRemove = false },
+        title = { Text("Убрать ${p.name}?") },
+        text = { Text("Карточка пропадёт из «Людей», и агент не будет заводить её снова. Воспоминания, где упоминается этот человек, останутся.") },
+        confirmButton = {
+            TextButton(onClick = { confirmRemove = false; scope.launch { c.store.delete(E.PEOPLE, id); back() } }) { Text("Убрать") }
+        },
+        dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Отмена") } })
 }
 
 @Composable

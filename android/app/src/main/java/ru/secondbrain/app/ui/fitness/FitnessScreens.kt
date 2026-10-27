@@ -103,9 +103,13 @@ fun FitnessScreen() {
     val trainingDays = settings.value?.get("training_days")?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull?.toIntOrNull() }
         ?: plans.mapNotNull { it.weekday }
     var newPlan by remember { mutableStateOf(false) }
+    var skipping by remember { mutableStateOf(false) }
     val active = workouts.firstOrNull { it.status == "in_progress" }
     val today = LocalDate.now()
-    val nextDay = (0..7).map { today.plusDays(it.toLong()) }.firstOrNull { it.dayOfWeek.value in trainingDays }
+    // Once today's workout is done or skipped, the card moves on to the next training day.
+    val todayMark = workouts.firstOrNull { it.status in setOf("done", "skipped") && it.start?.local()?.toLocalDate() == today }
+    val nextDay = ((if (todayMark != null) 1 else 0)..7).map { today.plusDays(it.toLong()) }
+        .firstOrNull { it.dayOfWeek.value in trainingDays }
     val nextPlan = nextDay?.let { d -> plans.firstOrNull { it.weekday == d.dayOfWeek.value && it.isActive } }
 
     fun start(plan: WorkoutPlan?) {
@@ -136,6 +140,17 @@ fun FitnessScreen() {
                     Text((if (nextDay == today) "Сегодня" else if (nextDay == today.plusDays(1)) "Завтра" else ruWeekdayName(nextDay.dayOfWeek.value).replaceFirstChar { it.uppercase() }) +
                         (settings.value?.str("training_time")?.let { " · $it" } ?: ""), style = MaterialTheme.typography.headlineSmall)
                     Secondary(nextPlan?.name ?: "Программа на этот день не выбрана")
+                    if (nextDay == today && active == null) {
+                        Gap(6)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { start(nextPlan) }) { Text("Начать") }
+                            OutlinedButton(onClick = { skipping = true }) { Text("Сегодня не иду") }
+                        }
+                    }
+                }
+                if (todayMark?.status == "skipped") {
+                    Gap(6)
+                    Secondary("Сегодня пропущена" + (todayMark.skipReason?.let { ": $it" } ?: ""))
                 }
                 Gap(10)
                 val weekStart = today.minusDays(today.dayOfWeek.value - 1L)
@@ -185,7 +200,7 @@ fun FitnessScreen() {
             AppCard(onClick = { nav("fitness/workout/${w.id}") }, padding = 12.dp) {
                 ListRow(plans.firstOrNull { it.id == w.planId }?.name ?: "Тренировка",
                     listOfNotNull(w.start?.let { relative(it) }, minutes?.let { "$it мин" }, w.feeling?.let { "самочувствие $it/10" },
-                        if (w.status == "skipped") "пропущена" else null).joinToString(" · "))
+                        if (w.status == "skipped") "пропущена" + (w.skipReason?.let { ": $it" } ?: "") else null).joinToString(" · "))
             }
         }
         item {
@@ -197,6 +212,21 @@ fun FitnessScreen() {
                 ListRow("Питание", icon = Icons.Outlined.Restaurant, iconTint = Tone.current.training) { nav("fitness/nutrition") }
             }
         }
+    }
+    if (skipping) Sheet({ skipping = false }) {
+        var reason by remember { mutableStateOf("Болею") }
+        var other by remember { mutableStateOf("") }
+        Text("Пропуск тренировки", style = MaterialTheme.typography.headlineSmall)
+        Secondary("Причину видит агент и учтёт её, когда будет разбирать неделю. Можно и просто написать ему в чат.")
+        ChoiceChips(listOf("Болею", "Нет времени", "Устал", "Другое").map { it to it }, reason, { reason = it })
+        if (reason == "Другое") Field(other, { other = it }, "Что случилось")
+        Button(onClick = {
+            scope.launch {
+                c.store.save(E.WORKOUTS, jsonOf("plan_id" to nextPlan?.id, "started_at" to nowIso(), "status" to "skipped",
+                    "skip_reason" to (if (reason == "Другое") other.ifBlank { null } else reason.lowercase())))
+                skipping = false
+            }
+        }) { Text("Отметить пропуск") }
     }
     if (newPlan) Sheet({ newPlan = false }) {
         var name by remember { mutableStateOf("") }
