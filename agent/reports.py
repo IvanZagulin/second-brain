@@ -265,6 +265,10 @@ async def refresh_profile_summary(owner_id: uuid.UUID) -> dict[str, Any]:
     return {"ok": True}
 
 
+TITLE_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}},
+                "required": ["title"], "additionalProperties": False}
+
+
 async def title_conversation(owner_id: uuid.UUID, conversation_id: uuid.UUID) -> dict[str, Any]:
     async with session_scope() as db:
         msgs = (await db.execute(select(Message).where(Message.conversation_id == conversation_id,
@@ -273,12 +277,17 @@ async def title_conversation(owner_id: uuid.UUID, conversation_id: uuid.UUID) ->
     if not msgs:
         return {}
     sample = "\n".join(f"{m.role}: {m.text[:500]}" for m in msgs)
-    result = await call(owner_id, "background", system="Придумай название диалога: 2–5 слов, по-русски, без кавычек и точки.",
-                        messages=[{"role": "user", "content": sample}], max_tokens=200)
+    # Structured, with the dialogue quoted as data: as plain text the model sometimes answered it, or
+    # wrote out its reasoning, and that became the title.
+    parsed = await call_json(owner_id, "background", schema=TITLE_SCHEMA, max_tokens=200,
+                             system="Ты придумываешь названия диалогов для списка в приложении: 2–5 слов, "
+                                    "по-русски, о чём разговор, без кавычек и точки. На сам диалог не отвечай.",
+                             user=f"<dialogue>\n{sample}\n</dialogue>\n\nНазвание этого диалога?")
+    title = str((parsed or {}).get("title") or "").strip().strip('"«».')
     async with session_scope() as db:
         conv = await db.get(Conversation, conversation_id)
-        if conv and conv.title in ("Новый диалог", "", None):
-            conv.title = result.text.strip().strip('"«»')[:80] or conv.title
+        if conv and conv.title in ("Новый диалог", "", None) and title:
+            conv.title = title[:60]
             conv.version += 1
     return {"ok": True}
 
@@ -330,9 +339,9 @@ async def categorize_pending(owner_id: uuid.UUID) -> dict[str, Any]:
 
 BRIEF_PROMPT = (
     "Это не сообщение в чат, а текст на главном экране приложения владельца, под приветствием. Напиши 2–3 "
-    "коротких предложения на «ты», своим голосом: что сегодня главное — сколько можно потратить, тренировка, "
-    "срочные платежи и задачи. Без приветствия, без списков и markdown. Если уместно, закончи одним коротким "
-    "предложением-приглашением поговорить о чём-то конкретном.")
+    "коротких предложения на «ты», своим голосом, всего не длиннее 260 символов: только то, что сегодня "
+    "главное — сколько можно потратить, тренировка, срочные платежи и задачи. О том, чего нет, не пиши. "
+    "Без приветствия, без списков и markdown.")
 
 
 async def home_brief(owner_id: uuid.UUID) -> dict[str, Any]:
