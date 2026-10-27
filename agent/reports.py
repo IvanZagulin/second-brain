@@ -326,3 +326,45 @@ async def categorize_pending(owner_id: uuid.UUID) -> dict[str, Any]:
                 tx.version += 1
                 applied += 1
     return {"done": applied}
+
+
+BRIEF_PROMPT = (
+    "Это не сообщение в чат, а текст на главном экране приложения владельца, под приветствием. Напиши 2–3 "
+    "коротких предложения на «ты», своим голосом: что сегодня главное — сколько можно потратить, тренировка, "
+    "срочные платежи и задачи. Без приветствия, без списков и markdown. Если уместно, закончи одним коротким "
+    "предложением-приглашением поговорить о чём-то конкретном.")
+
+
+async def home_brief(owner_id: uuid.UUID) -> dict[str, Any]:
+    """The agent's few lines on the home screen, refreshed in the background (see the /home endpoint)."""
+    async with session_scope() as db:
+        user = await db.get(User, owner_id)
+        now = local_now(user.timezone if user else None)
+        summary = await finance_summary(db, owner_id)
+        fit = await get_setting(db, owner_id, "fitness")
+        _, end = local_day_bounds(now.date(), user.timezone if user else None)
+        tasks = (await db.execute(select(Task).where(Task.owner_id == owner_id, Task.status == "open",
+                                                     Task.deleted_at.is_(None), Task.due_at < end)
+                                  .order_by(Task.due_at).limit(5))).scalars().all()
+        plan = None
+        if now.isoweekday() in (fit.get("training_days") or []):
+            plan = (await db.execute(select(WorkoutPlan).where(
+                WorkoutPlan.owner_id == owner_id, WorkoutPlan.weekday == now.isoweekday(),
+                WorkoutPlan.deleted_at.is_(None)))).scalars().first()
+        system = await system_prompt(db, owner_id)
+    obligations = [o for o in summary["upcoming_30d"] if o["due"] <= (now.date() + timedelta(days=3)).isoformat()]
+    facts = (f"Сейчас {RU_WEEKDAYS[now.weekday()]} {now:%H:%M}.\n"
+             f"Можно потратить сегодня {fmt_rub(summary['today_left_minor'])} (бюджет на день "
+             f"{fmt_rub(summary['daily_budget_minor'])}), свободно {fmt_rub(summary['free_minor'])}, до поступления "
+             f"{summary['days_until_income']} дн." + (" Остатки оценочные." if summary["estimated"] else "") + "\n"
+             f"Тренировка сегодня: {(plan.name + ' в ' + (fit.get('training_time') or '')) if plan else 'нет'}.\n"
+             f"Задачи на сегодня и просроченные: {'; '.join(t.title for t in tasks) or 'нет'}.\n"
+             f"Платежи в ближайшие 3 дня: {'; '.join(o['title'] + ' ' + fmt_rub(o['amount_minor']) for o in obligations) or 'нет'}.")
+    result = await call(owner_id, "background", system=system, max_tokens=600,
+                        messages=[{"role": "user", "content": f"{facts}\n\n{BRIEF_PROMPT}"}])
+    text = result.text.strip()
+    async with session_scope() as db:
+        await set_setting(db, owner_id, "home_brief", {"text": text, "at": utcnow().isoformat(),
+                                                       "date": now.date().isoformat()}, merge=False)
+    return {"ok": True}
+

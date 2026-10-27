@@ -320,7 +320,9 @@ async def analyze_import(owner_id: uuid.UUID, job_id: uuid.UUID) -> dict[str, An
             return "paused"
         first = rows[0]
         res = await save_extraction(
+            # Per-period questions pile up by the hundred; the portrait asks the few that matter.
             owner_id, parsed, tz_name=tz_name, source_kind="import", source_id=first.source_id, create_tasks=False,
+            questions_status="archived",
             evidence_for=lambda refs: [{"kind": "import_message", "id": ref_rows[r].id,
                                         "source_id": str(ref_rows[r].source_id)} for r in refs if r in ref_rows],
             default_evidence=[{"kind": "import_chat", "id": str(first.chat_id), "source_id": str(first.source_id)}])

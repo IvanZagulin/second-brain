@@ -33,7 +33,8 @@ async def process_events(ctx: dict) -> int:
 
 async def run_system_task(ctx: dict, name: str, owner_id: str) -> Any:
     fn = {"categorize_pending": reports.categorize_pending,
-          "profile_summary": reports.refresh_profile_summary}.get(name)
+          "profile_summary": reports.refresh_profile_summary,
+          "home_brief": reports.home_brief}.get(name)
     return await fn(uuid.UUID(owner_id)) if fn else None
 
 

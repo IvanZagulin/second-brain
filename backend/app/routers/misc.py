@@ -13,15 +13,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.core.deps import Auth, get_auth
 from app.core.errors import NotFound
+from app.core.money import fmt_rub
 from app.core.timeutil import local_day_bounds, local_now, utcnow
 from app.models import (
-    ApiUsage, Conversation, Experiment, Habit, HabitLog, LifeEvent, Message, MoodEntry, Note, Notification, Task,
+    ApiUsage, ClarifyingQuestion, Conversation, Experiment, Habit, HabitLog, LifeEvent, Message, MoodEntry, Note, Notification, Task,
     Workout, WorkoutPlan,
 )
 from app.services import sync as syncsvc
 from app.services.crud import crud_router, serialize
 from app.services.finance.engine import finance_summary
 from app.services.llm.budget import usage_summary
+from app.services.queue import enqueue
 from app.services.settings import get_setting
 
 # ---------------------------------------------------------------- notifications
@@ -174,6 +176,17 @@ async def home(auth: Auth = Depends(get_auth), db: AsyncSession = Depends(get_db
                                                            Workout.deleted_at.is_(None))
                                      .order_by(Workout.started_at.desc()).limit(1))).scalar_one_or_none()
     usage = await usage_summary(db, auth.owner_id)
+    brief = await get_setting(db, auth.owner_id, "home_brief")
+    fresh = bool(brief) and brief.get("date") == now.date().isoformat() and \
+        (utcnow() - datetime.fromisoformat(brief["at"])) < timedelta(hours=3)
+    if not fresh:
+        await enqueue("run_system_task", "home_brief", str(auth.owner_id),
+                      job_id=f"home_brief:{auth.owner_id}:{now:%Y%m%d%H}")
+    question = (await db.execute(select(ClarifyingQuestion).where(
+        ClarifyingQuestion.owner_id == auth.owner_id, ClarifyingQuestion.status == "open")
+        .order_by(ClarifyingQuestion.priority.desc(), ClarifyingQuestion.created_at.desc()).limit(1))).scalar_one_or_none()
+    open_questions = (await db.execute(select(func.count()).select_from(ClarifyingQuestion).where(
+        ClarifyingQuestion.owner_id == auth.owner_id, ClarifyingQuestion.status == "open"))).scalar_one()
     unread = (await db.execute(select(func.count()).select_from(Notification).where(
         Notification.owner_id == auth.owner_id, Notification.read_at.is_(None)))).scalar_one()
     return {
@@ -187,8 +200,21 @@ async def home(auth: Auth = Depends(get_auth), db: AsyncSession = Depends(get_db
         "mood": serialize(mood) if mood else None,
         "events": [serialize(e) for e in events],
         "api_budget": {"spent_usd": usage["spent_usd"], "limit_usd": usage["limit_usd"], "ratio": usage["ratio"]},
+        "brief": (brief or {}).get("text") or _template_brief(finance, next_workout),
+        "question": {"id": str(question.id), "question": question.question, "left": open_questions - 1} if question else None,
         "unread_notifications": unread,
     }
+
+
+def _template_brief(finance: dict | None, workout: dict | None) -> str:
+    """Until the agent has written today's lines (they come from a background job within a minute)."""
+    parts = []
+    if finance:
+        parts.append(f"Сегодня можно потратить {fmt_rub(finance['today_left_minor'])}, до поступления "
+                     f"{finance['days_until_income']} дн.")
+    if workout and workout.get("in_days") == 0:
+        parts.append(f"Тренировка в {workout.get('time') or 'обычное время'}: {workout.get('plan_name') or 'по плану'}.")
+    return " ".join(parts) or "Расскажите, что сегодня важно, — я подхвачу."
 
 
 experiments_router = APIRouter(prefix="/api/v1/experiments", tags=["tasks"])

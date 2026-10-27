@@ -132,7 +132,8 @@ async def extract_conversation(owner_id: uuid.UUID, conversation_id: uuid.UUID) 
 
 async def save_extraction(owner_id: uuid.UUID, parsed: dict[str, Any], *, tz_name: str, source_kind: str,
                           evidence_for, default_evidence: list[dict], source_id: uuid.UUID | None = None,
-                          conversation_id: uuid.UUID | None = None, create_tasks: bool = True) -> dict[str, int]:
+                          conversation_id: uuid.UUID | None = None, create_tasks: bool = True,
+                          questions_status: str = "open") -> dict[str, int]:
     stats = {"facts": 0, "tasks": 0, "people": 0, "events": 0, "questions": 0}
     async with session_scope() as db:
         people_ids: dict[str, uuid.UUID] = {}
@@ -206,6 +207,6 @@ async def save_extraction(owner_id: uuid.UUID, parsed: dict[str, Any], *, tz_nam
                              cause=mood.get("cause"), note="Определено по разговору"))
 
         for q in (parsed.get("questions") or [])[:2]:
-            db.add(ClarifyingQuestion(owner_id=owner_id, question=q[:500], context=source_kind))
+            db.add(ClarifyingQuestion(owner_id=owner_id, question=q[:500], context=source_kind, status=questions_status))
             stats["questions"] += 1
     return stats
