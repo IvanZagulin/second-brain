@@ -118,9 +118,12 @@ async def _attachment_blocks(db: AsyncSession, owner_id: uuid.UUID, ids: list[uu
         att = await db.get(Attachment, aid)
         if att is None or att.owner_id != owner_id:
             continue
-        if att.kind == "image":
-            if not privacy.get("allow_image_analysis"):
-                notes.append(f"[Изображение {att.file_name or ''} не отправлено: анализ изображений выключен в настройках]")
+        if att.kind in ("image", "progress_photo"):
+            progress = att.kind == "progress_photo"
+            if not privacy.get("allow_progress_photos_llm" if progress else "allow_image_analysis"):
+                what = "Фото формы" if progress else "Изображение"
+                switch = "«Фото формы»" if progress else "«Изображения»"
+                notes.append(f"[{what} {att.file_name or ''} не отправлено: в настройках приватности выключено {switch}]")
                 continue
             data = base64.standard_b64encode(Path(att.path).read_bytes()).decode()
             blocks.append({"type": "image", "source": {"type": "base64", "media_type": att.mime, "data": data}})

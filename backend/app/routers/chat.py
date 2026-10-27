@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import orjson
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -193,7 +193,9 @@ ALLOWED_MIME_PREFIX = ("image/", "application/pdf", "text/", "audio/")
 
 
 @router.post("/attachments", status_code=201)
-async def upload(file: UploadFile = File(...), auth: Auth = Depends(get_auth), db: AsyncSession = Depends(get_db)):
+async def upload(file: UploadFile = File(...), purpose: str = Form(""), auth: Auth = Depends(get_auth),
+                 db: AsyncSession = Depends(get_db)):
+    """``purpose=progress``: a body/form photo — governed by its own privacy switch, not the general one."""
     mime = file.content_type or "application/octet-stream"
     if not mime.startswith(ALLOWED_MIME_PREFIX):
         raise ApiError("Этот тип файла не поддерживается", code="unsupported_type")
@@ -215,6 +217,8 @@ async def upload(file: UploadFile = File(...), auth: Auth = Depends(get_auth), d
             out.write(chunk)
     kind = "image" if mime.startswith("image/") else "pdf" if mime == "application/pdf" else \
         "audio" if mime.startswith("audio/") else "document"
+    if kind == "image" and purpose == "progress":
+        kind = "progress_photo"
     att = Attachment(id=att_id, owner_id=auth.owner_id, kind=kind, mime=mime, file_name=file.filename, path=str(path),
                      size=size, sha256=digest.hexdigest())
     db.add(att)
