@@ -63,6 +63,8 @@ import ru.secondbrain.app.ui.components.LineChart
 import ru.secondbrain.app.ui.components.ListRow
 import ru.secondbrain.app.ui.components.Loading
 import ru.secondbrain.app.ui.components.LocalContainer
+import ru.secondbrain.app.data.api.ApiException
+import ru.secondbrain.app.ui.components.LocalSnackbar
 import ru.secondbrain.app.ui.components.LocalNavigate
 import ru.secondbrain.app.ui.components.Screen
 import ru.secondbrain.app.ui.components.SectionTitle
@@ -171,15 +173,15 @@ fun PhotosScreen() {
                     scope.launch {
                         val ids = listOf(a, b).map { p ->
                             val f = File(p.localPath!!)
-                            c.api.upload("/api/v1/chat/attachments", f.name, "image/jpeg", f.readBytes().toRequestBody("image/jpeg".toMediaTypeOrNull()))
-                                .jsonObject.str("id")!!
+                            c.api.upload("/api/v1/chat/attachments", f.name, "image/jpeg", f.readBytes().toRequestBody("image/jpeg".toMediaTypeOrNull()),
+                                mapOf("purpose" to "progress")).jsonObject.str("id")!!
                         }
                         val conv = c.chat.newConversation("trainer", "Сравнение формы")
                         c.chat.queueMessage(conv, "Сравни мою форму на двух фото (раньше и сейчас). Что изменилось и что подтянуть?", ids, "trainer")
                         nav("chat/$conv")
                     }
                 }) { Text("Обсудить с тренером") }
-                Secondary("Фото уходят в Claude, только если в настройках приватности разрешён анализ изображений.")
+                Secondary("Для разговора эти два фото загружаются на ваш сервер. Claude увидит их, только если в «Приватности» включено «Фото формы»; иначе тренер ответит без них.")
             }
         }
         if (visible.isEmpty()) item { EmptyState("Фото пока нет. Снимайте раз в 2–4 недели при одинаковом свете.") }
@@ -207,8 +209,13 @@ fun NutritionScreen() {
     val act = rememberAction()
     val scope = rememberCoroutineScope()
     val meals by c.store.observe(E.MEALS, Meal.serializer()).collectAsState(initial = emptyList())
-    val settings = rememberLoad { c.api.get("/api/v1/settings").jsonObject["fitness"]!!.jsonObject }
-    var mode by remember(settings.value) { mutableStateOf(settings.value?.str("nutrition_mode") ?: "off") }
+    val nav = LocalNavigate.current
+    val snackbar = LocalSnackbar.current
+    val allSettings = rememberLoad { c.api.get("/api/v1/settings").jsonObject }
+    val settings = allSettings.value?.get("fitness")?.jsonObject
+    // Meal photos are shown nowhere in the app: without image analysis they would only sit on the server.
+    val imagesAllowed = allSettings.value?.get("privacy")?.jsonObject?.str("allow_image_analysis") == "true"
+    var mode by remember(settings) { mutableStateOf(settings?.str("nutrition_mode") ?: "off") }
     var description by remember { mutableStateOf("") }
     var photo by remember { mutableStateOf<File?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -237,7 +244,7 @@ fun NutritionScreen() {
                 Text("Записать приём пищи", style = MaterialTheme.typography.titleMedium)
                 Field(description, { description = it }, "Что съели", singleLine = false)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = {
+                    if (imagesAllowed) OutlinedButton(onClick = {
                         val f = File(context.cacheDir, "captures/meal-${System.currentTimeMillis()}.jpg").apply { parentFile?.mkdirs() }
                         photo = f
                         take.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", f))
@@ -253,15 +260,27 @@ fun NutritionScreen() {
                                     "attachment_id" to attId, "estimate" to (mode != "off")))
                                 description = ""; photo = null
                                 c.sync.syncNow()
+                            } catch (e: ApiException) {
+                                if (e.isOffline) {
+                                    // No network: keep the meal without an estimate; it syncs later.
+                                    c.store.save(E.MEALS, jsonOf("eaten_at" to nowIso(), "description" to description, "estimated_by" to "user"))
+                                    description = ""; photo = null
+                                    snackbar.showSnackbar("Нет связи: записано без оценки")
+                                } else snackbar.showSnackbar(e.message ?: "Не удалось оценить")
                             } catch (e: Exception) {
-                                c.store.save(E.MEALS, jsonOf("eaten_at" to nowIso(), "description" to description, "estimated_by" to "user"))
-                                description = ""; photo = null
+                                snackbar.showSnackbar(e.message ?: "Не удалось оценить")
                             }
                             busy = false
                         }
                     }) { Text(if (busy) "Оцениваю…" else "Сохранить") }
                 }
-                if (mode != "off") Secondary("Калории и БЖУ по фото и описанию — приблизительная оценка, погрешность указывается.")
+                if (mode != "off") Secondary(if (imagesAllowed)
+                    "Калории и БЖУ по фото и описанию — приблизительная оценка, погрешность указывается. Фото смотрит Claude Haiku 5.5."
+                    else "Калории и БЖУ по описанию — приблизительная оценка, погрешность указывается.")
+                if (!imagesAllowed && allSettings.value != null) {
+                    Secondary("Распознавание еды по фото выключено, поэтому кнопки «Фото» нет: снимок нигде бы не использовался.")
+                    TextButton(onClick = { nav("settings/privacy") }) { Text("Включить в «Приватности»") }
+                }
             }
         }
         if (busy) item { Loading() }
