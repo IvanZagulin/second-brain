@@ -88,6 +88,7 @@ import ru.secondbrain.app.ui.components.Divider
 import ru.secondbrain.app.ui.components.EmptyState
 import ru.secondbrain.app.ui.components.Field
 import ru.secondbrain.app.ui.components.Gap
+import ru.secondbrain.app.ui.components.glueNumbers
 import ru.secondbrain.app.ui.components.Label
 import ru.secondbrain.app.ui.components.ListRow
 import ru.secondbrain.app.ui.components.LocalContainer
@@ -166,9 +167,11 @@ fun HomeScreen() {
                 }
             }
             item {
-                Text(home?.str("brief") ?: "Секунду, собираю картину дня…", style = AgentProse,
+                Text(glueNumbers(home?.str("brief") ?: "Секунду, собираю картину дня…"), style = AgentProse,
                     modifier = Modifier.clickable(enabled = agentConv != null) { nav("chat/$agentConv") })
             }
+            // Right under the brief, above the fold: further down it ended up behind the composer.
+            item { QuestionCard() }
             item {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (hasPortrait) Suggestion("Что ты обо мне знаешь") { nav("portrait") }
@@ -178,7 +181,6 @@ fun HomeScreen() {
                     Suggestion("Как этим пользоваться") { nav("help") }
                 }
             }
-            item { QuestionCard() }
             if (recent.isNotEmpty()) {
                 item { Label("Недавние", Modifier.padding(top = 6.dp)) }
                 recent.forEach { conv ->

@@ -149,13 +149,19 @@ fun Sheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     }
 }
 
+private val GroupSpace = Regex("(?<=\\d) (?=\\d{3}(?!\\d))")
+private val UnitSpace = Regex("(?<=\\d) (?=[₽%$€])")
+
+/** Keeps «3 370 ₽» on one line: the model writes plain spaces inside numbers and before the sign. */
+fun glueNumbers(text: String): String = text.replace(GroupSpace, "\u00A0").replace(UnitSpace, "\u00A0")
+
 /** Minimal Markdown for agent answers: headings, **bold**, *italic*, `code`, bullet and numbered lists. */
 @Composable
 fun Markdown(text: String, color: Color = Tone.current.text, style: TextStyle = MaterialTheme.typography.bodyLarge) {
     // Indented lines continue the previous item (wrapped list items in release notes and changelogs).
     val listItem = Regex("^\\s*([-*•]|\\d+[.)]) ")
     val lines = mutableListOf<String>()
-    text.trim().split("\n").forEach { raw ->
+    glueNumbers(text).trim().split("\n").forEach { raw ->
         val continues = raw.startsWith("  ") && raw.isNotBlank() && !listItem.containsMatchIn(raw) &&
             lines.lastOrNull()?.isNotBlank() == true
         if (continues) lines[lines.lastIndex] = lines.last() + " " + raw.trim() else lines += raw

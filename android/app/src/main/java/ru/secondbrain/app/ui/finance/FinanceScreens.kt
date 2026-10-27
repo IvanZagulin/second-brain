@@ -3,12 +3,11 @@ package ru.secondbrain.app.ui.finance
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.AccountBalance
@@ -148,7 +147,8 @@ fun FinanceScreen() {
             }
         }
         item {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Wraps instead of scrolling sideways: a chip cut at the edge looked broken.
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AssistChip(onClick = { nav("finance/wishlist") }, label = { Text("Хочу купить") }, leadingIcon = { Icon(Icons.Outlined.ShoppingBag, null) })
                 AssistChip(onClick = { scanQr() }, label = { Text("QR чека") }, leadingIcon = { Icon(Icons.Outlined.QrCodeScanner, null) })
                 AssistChip(onClick = {
