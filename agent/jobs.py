@@ -175,9 +175,7 @@ async def _nightly(owner_id: uuid.UUID, job: dict) -> dict:
 
 HANDLERS = {
     "followup": run_followup,
-    "initiative": lambda o, j: initiative.consider(o, j["payload"].get("trigger", j["goal"]), j["payload"].get("facts", ""),
-                                                   priority=max(j.get("priority", 1), 2), defer_if_quiet=False,
-                                                   dedupe_key=j["payload"].get("dedupe_key")),
+    "initiative": initiative.run_deferred,
     "extract_conversation": lambda o, j: extraction.extract_conversation(o, uuid.UUID(j["payload"]["conversation_id"])),
     "title_conversation": lambda o, j: reports.title_conversation(o, uuid.UUID(j["payload"]["conversation_id"])),
     "workout_analysis": lambda o, j: reports.workout_analysis(o, uuid.UUID(j["payload"]["workout_id"])),

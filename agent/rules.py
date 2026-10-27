@@ -71,24 +71,27 @@ async def on_transaction(owner_id: uuid.UUID, p: dict[str, Any]) -> dict:
             f"потрачено сегодня {fmt_rub(summary['today_spent_minor'])}, до поступления {summary['days_until_income']} дн."
             + (" Остатки оценочные." if summary["estimated"] else ""))
     results = {}
+    still = {"transaction_id": str(tx.id)}  # re-checked if the message waits for the morning
     if tx.direction == "in" and tx.flow_type == "income" and tx.amount_minor >= 500_000:
         results["income"] = await consider(owner_id, f"Поступление {amount} ({tx.merchant or tx.description or 'без описания'})",
                                            base + " Подскажи, как распределить: обязательства, цели, резерв.",
-                                           priority=1, dedupe_key=f"income:{tx.id}")
+                                           priority=1, dedupe_key=f"income:{tx.id}", validate=still)
     if tx.direction == "out" and tx.flow_type == "expense":
         if cat is not None and cat.is_impulse:
             results["impulse"] = await consider(
                 owner_id, f"Трата в категории «{cat.name}»: {amount} ({tx.merchant or '—'})",
                 f"{base} За месяц в этой категории уже {fmt_rub(month_cat_total)}.", priority=1,
-                dedupe_key=f"impulse:{tx.id}")
+                dedupe_key=f"impulse:{tx.id}", validate=still)
         elif tx.amount_minor >= int(fin.get("large_purchase_minor", 300_000)):
             results["large"] = await consider(owner_id, f"Крупная покупка {amount} ({tx.merchant or tx.description or '—'})",
-                                              base, priority=1, dedupe_key=f"large:{tx.id}")
-        if summary["overspent_today"]:
+                                              base, priority=1, dedupe_key=f"large:{tx.id}", validate=still)
+        # No daily budget means no balances yet: "overspent" against zero is noise, not news.
+        if summary["overspent_today"] and summary["daily_budget_minor"] > 0:
             results["overspent"] = await consider(
                 owner_id, "Превышен бюджет на сегодня",
                 f"{base} Последняя трата: {amount} {tx.merchant or ''}.", priority=2,
-                dedupe_key=f"overspent:{summary['date']}")
+                dedupe_key=f"overspent:{summary['date']}",
+                validate={**still, "overspent_date": str(summary["date"])})
     return {k: v.get("sent") for k, v in results.items()}
 
 

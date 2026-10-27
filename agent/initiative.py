@@ -16,7 +16,7 @@ from agent.chat import system_prompt
 from app.core.db import session_scope
 from app.core.errors import ApiError
 from app.core.timeutil import in_quiet_hours, local_now, utcnow
-from app.models import AgentJob, Conversation, Message, Notification, User
+from app.models import AgentJob, Conversation, Message, Notification, Transaction, User
 from app.services.llm.client import call_json
 from app.services.memory import format_memories, search_memories
 from app.services.notifications import create_notification
@@ -100,8 +100,12 @@ async def _limits_ok(db: AsyncSession, owner_id: uuid.UUID, priority: int) -> tu
 
 
 async def consider(owner_id: uuid.UUID, trigger: str, facts: str, *, priority: int = 1,
-                   dedupe_key: str | None = None, defer_if_quiet: bool = True) -> dict[str, Any]:
-    """Maybe write to the owner first. ``priority``: 0 low … 3 critical (critical ignores quiet hours)."""
+                   dedupe_key: str | None = None, defer_if_quiet: bool = True,
+                   validate: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Maybe write to the owner first. ``priority``: 0 low … 3 critical (critical ignores quiet hours).
+
+    ``validate`` describes what must still hold if the message is deferred to the morning (see ``stale_reason``).
+    """
     async with session_scope() as db:
         if dedupe_key:
             seen = (await db.execute(select(Notification.id).where(Notification.owner_id == owner_id,
@@ -120,8 +124,9 @@ async def consider(owner_id: uuid.UUID, trigger: str, facts: str, *, priority: i
                 if run_local <= now_local:
                     run_local += timedelta(days=1)
                 db.add(AgentJob(owner_id=owner_id, kind="initiative", goal=trigger, reason="отложено до утра",
-                                next_run_at=run_local, priority=priority, payload={"trigger": trigger, "facts": facts,
-                                                                                  "dedupe_key": dedupe_key}))
+                                next_run_at=run_local, priority=priority,
+                                payload={"trigger": trigger, "facts": facts, "dedupe_key": dedupe_key,
+                                         "validate": validate or {}}))
             return {"sent": False, "reason": why}
         system = await system_prompt(db, owner_id)
         mems = await search_memories(db, owner_id, f"{trigger} {facts}"[:500], limit=6)
@@ -157,3 +162,40 @@ async def consider(owner_id: uuid.UUID, trigger: str, facts: str, *, priority: i
                             next_run_at=utcnow() + timedelta(hours=float(decision["followup_in_hours"])),
                             priority=1, created_by="agent", tools=DEFAULT_JOB_TOOLS))
     return {"sent": True, "message_id": str(msg_id)}
+
+
+async def stale_reason(owner_id: uuid.UUID, validate: dict[str, Any]) -> str | None:
+    """Why a message deferred overnight no longer applies (None = still relevant).
+
+    ``transaction_id``: the transaction must still count (not deleted, excluded or a duplicate).
+    ``overspent_date``: today must still be that date and still be overspent.
+    """
+    from app.services.finance.engine import finance_summary
+
+    async with session_scope() as db:
+        tx_id = validate.get("transaction_id")
+        if tx_id:
+            tx = await db.get(Transaction, uuid.UUID(tx_id))
+            if tx is None or tx.deleted_at is not None or tx.status in ("excluded", "possible_duplicate"):
+                return "transaction no longer counts"
+        day = validate.get("overspent_date")
+        if day:
+            summary = await finance_summary(db, owner_id)
+            if str(summary["date"]) != day:
+                return "overspend was for another day"
+            if not summary["overspent_today"]:
+                return "no longer overspent"
+    return None
+
+
+async def run_deferred(owner_id: uuid.UUID, job: dict[str, Any]) -> dict[str, Any]:
+    """A message deferred by quiet hours: re-check that it still applies, then decide again."""
+    payload = job.get("payload") or {}
+    why = await stale_reason(owner_id, payload.get("validate") or {})
+    if why:
+        log.info("deferred initiative dropped: %s", why)
+        return {"sent": False, "reason": f"stale: {why}"}
+    return await consider(owner_id, payload.get("trigger", job["goal"]), payload.get("facts", ""),
+                          priority=max(job.get("priority", 1), 2), defer_if_quiet=False,
+                          dedupe_key=payload.get("dedupe_key"))
+
