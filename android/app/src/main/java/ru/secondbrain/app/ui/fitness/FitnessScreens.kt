@@ -98,6 +98,7 @@ fun FitnessScreen() {
     val plans by c.store.observe(E.PLANS, WorkoutPlan.serializer()).collectAsState(initial = emptyList())
     val workouts by c.store.observe(E.WORKOUTS, Workout.serializer()).collectAsState(initial = emptyList())
     val metrics by c.store.observe(E.METRICS, BodyMetric.serializer()).collectAsState(initial = emptyList())
+    val planItems by c.store.observe(E.PLAN_EXERCISES, PlanExercise.serializer()).collectAsState(initial = emptyList())
     val settings = rememberLoad { c.api.get("/api/v1/settings").jsonObject["fitness"]!!.jsonObject }
     val health = rememberLoad { c.api.get("/api/v1/health/summary", mapOf("days" to 7)).jsonObject }
     val trainingDays = settings.value?.get("training_days")?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull?.toIntOrNull() }
@@ -186,7 +187,9 @@ fun FitnessScreen() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(p.name, style = MaterialTheme.typography.titleMedium)
-                        Secondary(listOfNotNull(p.weekday?.let { ruWeekdayName(it) }, p.plannedMinutes?.let { "~$it мин" }).joinToString(" · "))
+                        val count = planItems.count { it.planId == p.id }
+                        Secondary(listOfNotNull(p.weekday?.let { ruWeekdayName(it) }, p.plannedMinutes?.let { "~$it мин" },
+                            if (count == 0) "пустая, добавьте упражнения" else "упражнений: $count").joinToString(" · "))
                     }
                     TextButton(onClick = { start(p) }) { Text("Начать") }
                 }
@@ -454,7 +457,9 @@ fun PlanScreen(id: String) {
             }
         }
         item { SectionTitle("Упражнения", "Добавить") { adding = true } }
-        if (sorted.isEmpty()) item { EmptyState("Добавьте упражнения — их можно взять из памяти или попросить агента-тренера составить список.") }
+        if (sorted.isEmpty()) item {
+            EmptyState("Программа пока пустая. Нажмите «Добавить» и выберите из базы упражнений или напишите агенту: «составь программу на ${p.weekday?.let { ruWeekdayName(it) } ?: "этот день"}».")
+        }
         items(sorted, key = { it.id }) { pe ->
             val ex = exById[pe.exerciseId]
             AppCard(padding = 12.dp, onClick = { editItem = pe }) {
@@ -485,23 +490,30 @@ fun PlanScreen(id: String) {
     }
     if (adding) Sheet({ adding = false }) {
         var name by remember { mutableStateOf("") }
-        var group by remember { mutableStateOf(p.muscleGroups.firstOrNull() ?: "other") }
-        Text("Добавить упражнение", style = MaterialTheme.typography.headlineSmall)
-        Field(name, { name = it }, "Название")
-        exercises.filter { !it.archived && name.isNotBlank() && it.name.contains(name, true) }.take(6).forEach { e ->
-            ListRow(e.name, MUSCLE_GROUPS[e.muscleGroup], onClick = {
-                act(null) { c.store.save(E.PLAN_EXERCISES, jsonOf("plan_id" to id, "exercise_id" to e.id, "position" to sorted.size)); adding = false }
-            })
+        var group by remember { mutableStateOf(p.muscleGroups.firstOrNull() ?: "back") }
+        val inPlan = sorted.mapTo(HashSet()) { it.exerciseId }
+        fun add(exerciseId: String) = act(null) {
+            c.store.save(E.PLAN_EXERCISES, jsonOf("plan_id" to id, "exercise_id" to exerciseId, "position" to sorted.size))
+            adding = false
         }
-        Label("Группа мышц")
+        Text("Добавить упражнение", style = MaterialTheme.typography.headlineSmall)
+        Field(name, { name = it }, "Найти в базе или назвать своё")
+        // The seeded catalog used to appear only after typing, so it looked as if there was none.
         ChoiceChips(MUSCLE_GROUPS.entries.map { it.key to it.value }, group, { group = it })
-        Button(enabled = name.isNotBlank(), onClick = {
-            act(null) {
-                val exId = exercises.firstOrNull { it.name.equals(name, true) }?.id ?: c.store.save(E.EXERCISES, jsonOf("name" to name, "muscle_group" to group))
-                c.store.save(E.PLAN_EXERCISES, jsonOf("plan_id" to id, "exercise_id" to exId, "position" to sorted.size))
-                adding = false
-            }
-        }) { Text("Добавить") }
+        val found = exercises.filter { e ->
+            !e.archived && e.id !in inPlan && (if (name.isBlank()) e.muscleGroup == group else e.name.contains(name, true))
+        }.sortedBy { it.name }
+        if (found.isEmpty()) Secondary(if (name.isBlank()) "В этой группе в базе пока пусто" else "В базе такого нет")
+        found.take(30).forEach { e -> ListRow(e.name, MUSCLE_GROUPS[e.muscleGroup], onClick = { add(e.id) }) }
+        if (name.isNotBlank() && exercises.none { it.name.equals(name, true) }) {
+            Button(onClick = {
+                act(null) {
+                    val exId = c.store.save(E.EXERCISES, jsonOf("name" to name.trim(), "muscle_group" to group))
+                    c.store.save(E.PLAN_EXERCISES, jsonOf("plan_id" to id, "exercise_id" to exId, "position" to sorted.size))
+                    adding = false
+                }
+            }) { Text("Своё: «${name.trim()}» (${MUSCLE_GROUPS[group]})") }
+        }
     }
     editItem?.let { pe ->
         Sheet({ editItem = null }) {
