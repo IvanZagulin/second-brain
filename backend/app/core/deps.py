@@ -37,7 +37,8 @@ async def get_auth(request: Request, db: AsyncSession = Depends(get_db)) -> Auth
         select(Device).where(Device.token_hash == hash_secret(token), Device.revoked_at.is_(None))
     )).scalar_one_or_none()
     if device is None:
-        raise Unauthorized("Устройство не найдено или отозвано")
+        # A distinct code: the app forgets its token only on this, never on a stray 401.
+        raise Unauthorized("Устройство не найдено или отозвано", code="device_revoked")
     user = await db.get(User, device.owner_id)
     if user is None:
         raise Unauthorized("Пользователь не найден")
