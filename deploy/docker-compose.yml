@@ -115,6 +115,7 @@ services:
     volumes:
       - ./scripts:/scripts:ro
       - ${BACKUP_DIR:-/var/backups/second-brain}:/backups
+      - appdata:/data  # only for the backup-last-ok marker the scheduler watches
     depends_on:
       db:
         condition: service_healthy

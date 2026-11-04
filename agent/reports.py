@@ -14,6 +14,9 @@ from sqlalchemy import func, select
 
 from agent.chat import system_prompt
 from agent.initiative import consider, deliver_message
+from agent.insights import (
+    SHORT_SLEEP_MIN, fmt_minutes, habits_line, habits_status, habits_week, health_overview, last_night_sleep,
+)
 from app.core.db import session_scope
 from app.core.money import fmt_rub
 from app.core.timeutil import RU_WEEKDAYS, brief_key, day_part, local_day_bounds, local_now, parse_hhmm, tz, utcnow
@@ -114,8 +117,18 @@ async def weekly_report(owner_id: uuid.UUID) -> dict[str, Any]:
                                                               Memory.created_at >= s0,
                                                               Memory.type.in_(("behavioral", "episodic")))
                                          .limit(30))).scalars().all()
+        health = await health_overview(db, owner_id, 7, tz_name)
+        habits = await habits_week(db, owner_id, start, today)
         system = await system_prompt(db, owner_id)
     top = ", ".join(f"{names.get(k, 'без категории')} {fmt_rub(v)}" for k, v in list(cur["by_category"].items())[:6])
+    health_s = "нет данных с часов"
+    if health["days_with_data"]:
+        health_s = (f"сон в среднем {fmt_minutes(health['sleep_avg_min'])}, коротких ночей (<6 ч) {health['short_nights']}"
+                    + (f", шагов в день {health['steps_avg']}" if health["steps_avg"] else "")
+                    + (f", пульс покоя {health['resting_hr_avg']}" if health["resting_hr_avg"] else "")
+                    + "; по дням сон: " + ", ".join(f"{d['date'][5:]} {fmt_minutes(d['sleep_min'])}"
+                                                     for d in health["days"] if d["sleep_min"]))
+    habits_s = "; ".join(f"{h['name']} {h['done']}/{h['due']}" for h in habits) or "нет привычек"
     facts = (
         f"Неделя {start:%d.%m}–{today:%d.%m}.\n"
         f"Траты: {fmt_rub(cur['totals'].get('expense_net', 0))} (прошлая неделя {fmt_rub(prev['totals'].get('expense_net', 0))}). "
@@ -123,12 +136,14 @@ async def weekly_report(owner_id: uuid.UUID) -> dict[str, Any]:
         f"Сейчас свободно {fmt_rub(summary['free_minor'])}, долгов всего {fmt_rub(summary['debts_total_minor'])}.\n"
         f"Тренировок: {sum(1 for w in workouts if w.status == 'done')} из плана {len(fit.get('training_days') or [])}.\n"
         f"Вес: {', '.join(f'{float(w.value):g}' for w in weights[-6:]) or 'нет замеров'}.\n"
+        f"Здоровье (часы): {health_s}.\n"
+        f"Привычки (сделано/нужно): {habits_s}.\n"
         f"Задачи: выполнено {done}, просрочено {len(overdue)} ({'; '.join(t.title for t in overdue[:5])}).\n"
         f"Настроение: {', '.join(str(m.score) for m in moods) or 'не записывалось'}.\n"
         f"Новые наблюдения за неделю:\n" + "\n".join(f"- {m.content}" for m in observations[:20])
     )
-    prompt = (f"{facts}\n\nСделай недельный отчёт для владельца: деньги, тренировки, задачи и обещания, "
-              "состояние. Найди 1–3 закономерности (например, связь трат с настроением или срывов с днями недели) "
+    prompt = (f"{facts}\n\nСделай недельный отчёт для владельца: деньги, тренировки, сон и привычки, задачи и обещания, "
+              "состояние. Найди 1–3 закономерности (например, связь трат с настроением, сна с тренировками, срывов с днями недели) "
               "и сформулируй как гипотезы с основаниями. В конце — 2–3 конкретных действия на следующую неделю. "
               "До 250 слов, в своей манере.")
     result = await call(owner_id, "analysis", system=system, messages=[{"role": "user", "content": prompt}],
@@ -154,13 +169,18 @@ async def morning_brief(owner_id: uuid.UUID) -> dict[str, Any]:
         tasks = (await db.execute(select(Task).where(Task.owner_id == owner_id, Task.status == "open",
                                                      Task.deleted_at.is_(None), Task.due_at < end)
                                   .order_by(Task.due_at).limit(6))).scalars().all()
+        sleep = await last_night_sleep(db, owner_id, user.timezone if user else None)
+        habits = habits_line(await habits_status(db, owner_id, now.date()))
     training = now.isoweekday() in (fit.get("training_days") or [])
     obligations = [o for o in summary["upcoming_30d"] if o["due"] <= (now.date() + timedelta(days=2)).isoformat()]
     facts = (f"{RU_WEEKDAYS[now.weekday()].capitalize()}. Тренировка сегодня: {'да' if training else 'нет'}.\n"
-             f"Бюджет на сегодня {fmt_rub(summary['daily_budget_minor'])}, свободно {fmt_rub(summary['free_minor'])}"
+             + (f"Сон по часам: {fmt_minutes(sleep)}" + (" — мало" if sleep < SHORT_SLEEP_MIN else "") + ".\n"
+                if sleep is not None else "")
+             + f"Бюджет на сегодня {fmt_rub(summary['daily_budget_minor'])}, свободно {fmt_rub(summary['free_minor'])}"
              + (" (оценка)" if summary["estimated"] else "") + ".\n"
              f"Задачи на сегодня/просрочено: {'; '.join(t.title for t in tasks) or 'нет'}.\n"
-             f"Платежи в ближайшие 2 дня: {'; '.join(o['title'] + ' ' + fmt_rub(o['amount_minor']) for o in obligations) or 'нет'}.")
+             f"Платежи в ближайшие 2 дня: {'; '.join(o['title'] + ' ' + fmt_rub(o['amount_minor']) for o in obligations) or 'нет'}."
+             + (f"\n{habits}" if habits else ""))
     return await consider(owner_id, "Утро: короткий план дня",
                           facts + "\nНапиши короткое утреннее сообщение: главное на сегодня, без воды.",
                           priority=1, dedupe_key=f"morning:{now.date()}")
@@ -174,11 +194,18 @@ async def evening_checkin(owner_id: uuid.UUID) -> dict[str, Any]:
         mood_today = (await db.execute(select(func.count()).select_from(MoodEntry).where(
             MoodEntry.owner_id == owner_id, MoodEntry.occurred_at >= start))).scalar_one()
         spent = (await spending(db, owner_id, start, utcnow()))["totals"].get("expense_net", 0)
-    if mood_today:
+        missing = habits_line(await habits_status(db, owner_id, now.date()), only_missing=True)
+    if mood_today and not missing:
         return {"sent": False, "reason": "mood already logged"}
-    return await consider(owner_id, "Вечер: итоги дня",
-                          f"Сегодня потрачено {fmt_rub(spent)}. Настроение сегодня не записано. "
-                          "Предложи коротко оценить день и настроение по 10-балльной шкале.",
+    facts = f"Сегодня потрачено {fmt_rub(spent)}. "
+    facts += "Настроение сегодня не записано. " if not mood_today else ""
+    facts += f"{missing} " if missing else ""
+    ask = []
+    if not mood_today:
+        ask.append("оценить день и настроение по 10-балльной шкале")
+    if missing:
+        ask.append("отметить привычки (или честно сказать, что не вышло)")
+    return await consider(owner_id, "Вечер: итоги дня", facts + "Предложи коротко " + " и ".join(ask) + ".",
                           priority=0, dedupe_key=f"evening:{now.date()}")
 
 
@@ -364,6 +391,8 @@ async def home_brief(owner_id: uuid.UUID) -> dict[str, Any]:
         last = (await db.execute(select(Workout).where(Workout.owner_id == owner_id, Workout.status == "done",
                                                        Workout.deleted_at.is_(None))
                                  .order_by(Workout.started_at.desc()).limit(1))).scalar_one_or_none()
+        sleep = await last_night_sleep(db, owner_id, user.timezone if user else None)
+        habits = habits_line(await habits_status(db, owner_id, now.date()), only_missing=True)
         system = await system_prompt(db, owner_id)
     at = fit.get("training_time")
     if last and last.started_at >= start:
@@ -379,8 +408,11 @@ async def home_brief(owner_id: uuid.UUID) -> dict[str, Any]:
              f"{fmt_rub(summary['daily_budget_minor'])}), свободно {fmt_rub(summary['free_minor'])}, до поступления "
              f"{summary['days_until_income']} дн." + (" Остатки оценочные." if summary["estimated"] else "") + "\n"
              f"Тренировка сегодня: {workout}.\n"
-             f"Задачи на сегодня и просроченные: {'; '.join(t.title for t in tasks) or 'нет'}.\n"
-             f"Платежи в ближайшие 3 дня: {'; '.join(o['title'] + ' ' + fmt_rub(o['amount_minor']) for o in obligations) or 'нет'}.")
+             + (f"Сон по часам: {fmt_minutes(sleep)}" + (" — мало" if sleep < SHORT_SLEEP_MIN else "") + ".\n"
+                if sleep is not None else "")
+             + f"Задачи на сегодня и просроченные: {'; '.join(t.title for t in tasks) or 'нет'}.\n"
+             f"Платежи в ближайшие 3 дня: {'; '.join(o['title'] + ' ' + fmt_rub(o['amount_minor']) for o in obligations) or 'нет'}."
+             + (f"\n{habits}" if habits and now.hour >= 12 else ""))
     result = await call(owner_id, "background", system=system, max_tokens=600,
                         messages=[{"role": "user", "content": f"{facts}\n\n{BRIEF_PROMPT}"}])
     text = result.text.strip()

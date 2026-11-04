@@ -79,7 +79,16 @@ async def resolve_account(db: AsyncSession, owner_id: uuid.UUID, *, card_last4: 
 
 async def _candidates(db: AsyncSession, owner_id: uuid.UUID, *, amount_minor: int, direction: str,
                       at: datetime, window: timedelta, card_last4: str | None, account_id: uuid.UUID | None,
-                      exclude_source_kind: str | None) -> list[Transaction]:
+                      exclude_source_kind: str | None, import_job_id: uuid.UUID | None = None,
+                      bank_op_id: str | None = None) -> list[Transaction]:
+    if bank_op_id:
+        # The bank's operation id beats every heuristic: the same operation from another export.
+        same = (await db.execute(select(Transaction).where(
+            Transaction.owner_id == owner_id, Transaction.bank_op_id == bank_op_id, Transaction.deleted_at.is_(None),
+            Transaction.amount_minor == amount_minor, Transaction.direction == direction,
+            Transaction.status != "excluded"))).scalars().all()
+        if same:
+            return list(same)
     q = select(Transaction).where(
         Transaction.owner_id == owner_id, Transaction.amount_minor == amount_minor,
         Transaction.direction == direction, Transaction.deleted_at.is_(None),
@@ -92,12 +101,13 @@ async def _candidates(db: AsyncSession, owner_id: uuid.UUID, *, amount_minor: in
         q = q.where(or_(Transaction.account_id.is_(None), Transaction.account_id == account_id))
     found = list((await db.execute(q)).scalars().all())
     if exclude_source_kind and found:
-        # A transaction that already has evidence of this kind is a different operation.
-        taken = set((await db.execute(
-            select(TransactionSource.transaction_id).where(
-                TransactionSource.transaction_id.in_([t.id for t in found]),
-                TransactionSource.kind == exclude_source_kind)
-        )).scalars().all())
+        # A transaction that already has evidence of this kind is a different operation — except a statement
+        # row from *another* file: the same period exported as CSV and as PDF is the same operation.
+        taken_q = select(TransactionSource.transaction_id).where(
+            TransactionSource.transaction_id.in_([t.id for t in found]), TransactionSource.kind == exclude_source_kind)
+        if exclude_source_kind == "statement" and import_job_id is not None:
+            taken_q = taken_q.where(TransactionSource.import_job_id == import_job_id)
+        taken = set((await db.execute(taken_q)).scalars().all())
         found = [t for t in found if t.id not in taken]
     return found
 
@@ -152,7 +162,7 @@ async def ingest_evidence(db: AsyncSession, owner_id: uuid.UUID, *, kind: str, f
         window = timedelta(days=1, hours=12)
     cands = await _candidates(db, owner_id, amount_minor=amount_minor, direction=direction, at=occurred_at,
                               window=window, card_last4=card_last4, account_id=account.id if account else None,
-                              exclude_source_kind=kind)
+                              exclude_source_kind=kind, import_job_id=import_job_id, bank_op_id=bank_op_id)
     if len(cands) == 1:
         tx = cands[0]
         _enrich(tx, rank=rank, merchant=merchant, description=description, occurred_at=occurred_at,

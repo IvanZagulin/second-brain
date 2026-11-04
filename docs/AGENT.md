@@ -43,6 +43,17 @@ Resumable, stops at the API budget.
 - **Scheduler** (`workers/scheduler.py`) dispatches due jobs to the **worker** (`workers/worker.py`, arq), recovers
   stuck jobs, sweeps pending pushes and events.
 
+## What the agent sees besides chat
+
+`agent/insights.py` computes, in the owner's local calendar, what the watch and the diaries say: sleep (a session
+counts for the day it ends on), steps and resting heart rate from `health_records`; habit status, streaks and
+broken streaks; nutrition totals from `meals`; and the owner's ratings of the agent's own messages
+(`messages.feedback` = useful | noise, set from the app under agent-initiated messages). These feed the
+`<context>` block, the morning brief, the home brief, the evening check-in, the weekly report, the tools
+`health_overview`, `nutrition_overview`, `search_notes`, `list_habits`, the rules in `agent/rules.py` (short night
+before a training day, a streak of 7+ days broken yesterday) and the initiative prompt (recent ratings, with an
+explicit "write less" conclusion when "noise" dominates).
+
 ## Permissions and the journal
 
 Each tool has a level (A automatic, B automatic + notification + rollback, C confirmation) — see

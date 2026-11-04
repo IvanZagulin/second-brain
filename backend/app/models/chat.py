@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Computed, ForeignKey, Index, UniqueConstraint, func
+from sqlalchemy import Computed, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -56,5 +56,6 @@ class Message(UUIDPkMixin, OwnedMixin, SyncMixin, Base):
     status: Mapped[str] = mapped_column(default="complete")  # complete | streaming | error | pending
     client_message_id: Mapped[str | None]
     source: Mapped[str] = mapped_column(default="app")  # app | notification_reply | agent | share
+    feedback: Mapped[str | None] = mapped_column(String(16))  # owner's rating of an agent message: useful | noise
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     tsv: Mapped[Any] = mapped_column(TSVECTOR, Computed("to_tsvector('russian', coalesce(text, ''))", persisted=True))

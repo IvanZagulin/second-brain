@@ -180,6 +180,13 @@ interface BankNotificationDao {
     @Query("UPDATE bank_notifications SET uploaded = 1, result = :result WHERE id = :id")
     suspend fun markUploaded(id: Long, result: String?)
 
+    /**
+     * Uploaded: the server has the raw notification, the phone only needs the row (dedupeKey, postedAt) to
+     * avoid re-capturing it until [prune]. Blank the amounts/merchant text so the local DB does not keep it.
+     */
+    @Query("UPDATE bank_notifications SET uploaded = 1, result = :result, title = NULL, text = '' WHERE id = :id")
+    suspend fun markUploadedAndScrub(id: Long, result: String?)
+
     @Query("SELECT * FROM bank_notifications ORDER BY postedAt DESC LIMIT 50")
     fun recent(): Flow<List<BankNotificationEntity>>
 

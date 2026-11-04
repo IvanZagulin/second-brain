@@ -25,6 +25,9 @@ backup_once() {
   mv "${file}.tmp" "${file}"
   sha256sum "${file}" > "${file}.sha256"
   echo "$(date -Is) backup ok ${file} $(du -h "${file}" | cut -f1)"
+  # The scheduler and /system/health read this marker; a stale one pushes a warning to the owner.
+  # The backup container runs as root; the API (uid 10001) must still be able to read the marker.
+  [ -d /data ] && ( umask 022; date -u +%Y-%m-%dT%H:%M:%S+00:00 > /data/backup-last-ok ) 2>/dev/null
   if [ "${BACKUP_KEEP_DAYS:-30}" -gt 0 ]; then
     find /backups -maxdepth 1 -name 'brain-*.dump.enc*' -mtime +"${BACKUP_KEEP_DAYS}" -print -delete
   fi

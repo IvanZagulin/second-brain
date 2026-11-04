@@ -267,6 +267,11 @@ async def run_job(job_id: uuid.UUID) -> dict[str, Any]:
                 job.next_run_at = next_occurrence(job.recurrence, utcnow(), tz_name)
             elif job.status != "cancelled":
                 job.status = "done" if status == "done" else "failed"
+                if job.status == "failed" and job.kind not in ("title_conversation",):
+                    # The owner is the operator: a job that gave up should not fail silently in a log.
+                    await create_notification(db, owner_id, title="Фоновое задание не выполнено",
+                                              body=f"{job.goal}: {error or 'ошибка'}"[:300], category="system",
+                                              priority="low", silent=True, dedupe_key=f"ops:job:{job.id}")
         elif status == "budget":
             job.status, job.next_run_at = "scheduled", retry_at
             job.attempts = max(job.attempts - 1, 0)

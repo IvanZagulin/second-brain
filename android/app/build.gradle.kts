@@ -20,6 +20,9 @@ val signingProps = Properties().apply {
 }
 fun signingValue(key: String, env: String): String? = signingProps.getProperty(key) ?: System.getenv(env)
 
+val hasReleaseKey = signingValue("storeFile", "SIGNING_STORE_FILE") != null
+val isCi = System.getenv("CI") == "true"
+
 android {
     namespace = "ru.secondbrain.app"
     compileSdk = 36
@@ -53,7 +56,9 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             val release = signingConfigs.getByName("release")
-            signingConfig = if (release.storeFile != null) release else signingConfigs.getByName("debug")
+            // Locally a developer may build a release APK with the debug key to try R8/shrinking; in CI that would
+            // silently publish an APK nobody can install over the real one, so the release tasks refuse (below).
+            signingConfig = if (hasReleaseKey) release else signingConfigs.getByName("debug")
         }
         debug {
             // Same package as release: Firebase is configured for ru.secondbrain.app only.
@@ -76,6 +81,22 @@ android {
     }
 
     testOptions.unitTests.isReturnDefaultValues = true
+}
+
+// CI=true without a release keystore: fail the release packaging tasks (not configuration, so unit tests and
+// debug builds in CI still work without the secrets) instead of shipping a debug-signed "release".
+if (isCi && !hasReleaseKey) {
+    tasks.configureEach {
+        if (name.startsWith("package") && name.contains("Release")) {
+            doFirst {
+                throw GradleException(
+                    "Release build in CI requires the release signing key: set SIGNING_STORE_FILE, SIGNING_STORE_PASSWORD, " +
+                        "SIGNING_KEY_ALIAS and SIGNING_KEY_PASSWORD (or provide android/keystore.properties). " +
+                        "Refusing to sign the release APK with the debug key.",
+                )
+            }
+        }
+    }
 }
 
 kotlin {

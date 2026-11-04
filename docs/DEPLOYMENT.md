@@ -83,7 +83,11 @@ Run the check monthly. Copy backups off the server (e.g. `scp`) for disaster rec
 
 ## Health and logs
 
-- `curl -s http://127.0.0.1:8040/api/v1/system/health`
+- `curl -s http://127.0.0.1:8040/api/v1/system/health` — `ok` covers DB and Redis; `warnings` lists what is
+  off among `scheduler` (heartbeat older than 2 min), `worker` (arq health key missing), `embedder`, `jobs`
+  (failed in 24 h) and `backup` (marker `/data/backup-last-ok` older than 36 h). The scheduler checks the
+  backup marker and the embedder hourly and pushes a notification to the owner when they are off; a job that
+  gives up for good also pushes.
 - `docker compose ps`, `docker compose logs -f api worker scheduler`
 - Logs are JSON, rotated (10 MB × 3 per container) and never include message texts, bank notification texts or
   keys unless `DEBUG_LOG_BODIES=true`.

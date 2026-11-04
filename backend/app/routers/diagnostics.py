@@ -28,7 +28,13 @@ class ClientLogIn(BaseModel):
 async def client_log(body: ClientLogIn, auth: Auth = Depends(get_auth)):
     folder = get_settings().data_dir / "client-logs"
     folder.mkdir(parents=True, exist_ok=True)
-    name = f"{utcnow():%Y%m%d-%H%M%S}-{body.kind}-{uuid.uuid4().hex[:6]}.txt"
+    kind = body.kind if body.kind in ("log", "crash") else "log"
+    # Phone logs are for debugging a current problem, not an archive: keep a month.
+    cutoff = utcnow().timestamp() - 30 * 86400
+    for old in folder.glob("*.txt"):
+        if old.stat().st_mtime < cutoff:
+            old.unlink(missing_ok=True)
+    name = f"{utcnow():%Y%m%d-%H%M%S}-{kind}-{uuid.uuid4().hex[:6]}.txt"
     header = f"device={body.device} android={body.android} app={body.app_version} device_id={auth.device.id}\n\n"
     (folder / name).write_text(header + redact(body.text), encoding="utf-8")
     return {"ok": True, "file": name}

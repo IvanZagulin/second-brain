@@ -68,7 +68,6 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import ru.secondbrain.app.core.Prefs
 import ru.secondbrain.app.core.parseInstant
 import ru.secondbrain.app.core.relative
 import ru.secondbrain.app.core.ruDate
@@ -118,7 +117,7 @@ fun HomeScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
     val scope = rememberCoroutineScope()
-    val cached by c.prefs.flow(Prefs.Keys.homeCache).collectAsState(initial = null)
+    val cached by c.prefs.homeCacheFlow().collectAsState(initial = null)
     val home = cached?.let { runCatching { PlainJson.parseToJsonElement(it).jsonObject }.getOrNull() }
     val update by c.updates.available.collectAsState()
     val convs by c.store.observe(E.CONVERSATIONS, Conversation.serializer()).collectAsState(initial = emptyList())

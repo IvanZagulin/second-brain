@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.chat import system_prompt
 from agent.context import recent_digest
+from agent.insights import feedback_hint
 from app.core.db import session_scope
 from app.core.errors import ApiError
 from app.core.timeutil import in_quiet_hours, local_now, utcnow
@@ -138,12 +139,15 @@ async def consider(owner_id: uuid.UUID, trigger: str, facts: str, *, priority: i
         user = await db.get(User, owner_id)
         now_local = local_now(user.timezone if user else None)
         digest = await recent_digest(db, owner_id, now_local, since=utcnow() - timedelta(hours=20), exclude=conv.id)
+        ratings = await feedback_hint(db, owner_id)
     recent_s = "\n".join(f"{'Ты' if m.role == 'assistant' else 'Владелец'} ({m.created_at:%d.%m %H:%M}): {m.text[:400]}"
                          for m in reversed(recent)) or "—"
     prompt = (
         f"Сейчас {now_local:%A %d.%m %H:%M}. Произошло: {trigger}.\nФакты:\n{facts}\n\n"
         f"Относящиеся воспоминания:\n{format_memories(mems) or '—'}\n\nПоследние сообщения в твоём канале:\n{recent_s}\n\n"
         f"Остальное за сутки (другие диалоги, тренировка, свежая память):\n{digest or '—'}\n\n"
+        + (f"{ratings}\n\n" if ratings else "")
+        +
         "Не спрашивай о том, что владелец уже рассказал в любом из диалогов: опирайся на это. "
         "Реши, стоит ли сейчас написать владельцу первым. Пиши только если есть реальный повод: предупредить, "
         "напомнить об обещании, прокомментировать важное, задать нужный вопрос. Не повторяй то, что уже писал. "

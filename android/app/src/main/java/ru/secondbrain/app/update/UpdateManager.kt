@@ -2,6 +2,9 @@ package ru.secondbrain.app.update
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
+import android.content.pm.Signature
 import android.net.ConnectivityManager
 import android.provider.Settings
 import androidx.core.content.FileProvider
@@ -34,12 +37,18 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
-data class Release(val version: String, val notes: String, val apkUrl: String, val apkSize: Long, val shaUrl: String?)
+/** [shaUrl] is null when the release lacks its `<apk>.sha256` asset: such a release is shown but never installed. */
+data class Release(val version: String, val notes: String, val apkUrl: String, val apkSize: Long, val shaUrl: String?) {
+    val installable get() = shaUrl != null
+}
+
+const val NO_CHECKSUM_MESSAGE = "В релизе нет контрольной суммы"
 
 /**
- * In-app updates from GitHub Releases: check → download APK → verify SHA-256 → hand to the system
- * installer. Android always asks the owner to confirm installation. The app checks when it opens and in
- * the background; on Wi-Fi the new version is fetched ahead, so "Установить" starts the installer at once.
+ * In-app updates from GitHub Releases: check → download APK → verify SHA-256 → verify package, version and
+ * signing certificate against the installed app → hand to the system installer. Android always asks the
+ * owner to confirm installation. The app checks when it opens and in the background; on Wi-Fi the new
+ * version is fetched ahead, so "Установить" starts the installer at once.
  */
 class UpdateManager(private val context: Context, private val api: ApiClient, private val prefs: Prefs) {
 
@@ -76,7 +85,8 @@ class UpdateManager(private val context: Context, private val api: ApiClient, pr
         val tag = rel["tag"]?.jsonPrimitive?.contentOrNull ?: return@withContext null
         val assets = rel["assets"]?.jsonArray?.map { it.jsonObject } ?: emptyList()
         val apk = assets.firstOrNull { it.name().endsWith(".apk") } ?: return@withContext null
-        val sha = assets.firstOrNull { it.name() == apk.name() + ".sha256" || it.name().endsWith(".sha256") }
+        // Exact name only: a stray "*.sha256" for another file must not vouch for this APK.
+        val sha = assets.firstOrNull { it.name() == apk.name() + ".sha256" }
         prefs.set(Prefs.Keys.lastUpdateCheck, System.currentTimeMillis())
         Release(tag.removePrefix("v"), rel["body"]?.jsonPrimitive?.contentOrNull ?: "", apk.url(),
             apk["size"]?.jsonPrimitive?.longOrNull ?: 0, sha?.url())
@@ -123,25 +133,67 @@ class UpdateManager(private val context: Context, private val api: ApiClient, pr
         .onFailure { AppLog.w("update", "prefetch failed: ${it.message}") }.getOrNull()
 
     suspend fun download(release: Release, onProgress: (Float) -> Unit): File = withContext(Dispatchers.IO) {
+        // Mandatory: without the published checksum nothing vouches for the bytes we are about to install.
+        val shaUrl = release.shaUrl ?: throw SecurityException(NO_CHECKSUM_MESSAGE)
         ready(release)?.let { onProgress(1f); return@withContext it }
         dir.mkdirs()
         dir.listFiles()?.forEach { it.delete() }  // older downloads in the app's own cache
         val file = apkFile(release)
         api.downloadTo(release.apkUrl, file) { done, total -> if (total > 0) onProgress(done.toFloat() / total) }
-        release.shaUrl?.let { url ->
-            val shaFile = File(dir, "apk.sha256")
-            api.downloadTo(url, shaFile)
-            val expected = shaFile.readText().trim().split(Regex("\\s+")).first().lowercase()
-            val actual = sha256(file)
-            if (expected != actual) {
-                file.delete()
-                throw SecurityException("Контрольная сумма не совпала — файл повреждён или подменён")
-            }
+        val shaFile = File(dir, "apk.sha256")
+        api.downloadTo(shaUrl, shaFile)
+        val expected = shaFile.readText().trim().split(Regex("\\s+")).first().lowercase()
+        val actual = sha256(file)
+        if (expected != actual) {
+            file.delete()
+            throw SecurityException("Контрольная сумма не совпала — файл повреждён или подменён")
         }
+        verifyIdentityOrDelete(file)
         okFile(release).writeText(sha256(file))
         AppLog.i("update", "downloaded ${release.version}")
         file
     }
+
+    /**
+     * The APK must be this package, newer than the installed build and signed with the installed app's key.
+     * On failure the file is removed (so no stale `.ok` marker can ever vouch for it) and the reason is thrown.
+     */
+    private fun verifyIdentityOrDelete(file: File) {
+        val error = runCatching { verifyApkIdentity(readApkIdentity(file), context.packageName, installedVersionCode(), installedSigners()) }
+            .getOrElse { "Не удалось проверить файл обновления: ${it.message}" }
+        if (error != null) {
+            file.delete()
+            AppLog.w("update", "rejected ${file.name}: $error")
+            throw SecurityException(error)
+        }
+    }
+
+    private fun readApkIdentity(file: File): ApkIdentity {
+        val pm = context.packageManager
+        val info = pm.getPackageArchiveInfo(file.path, PackageManager.GET_SIGNING_CERTIFICATES)
+            ?: return ApkIdentity(null, 0, emptyList())
+        var signers = info.signerDigests()
+        if (signers.isEmpty()) {
+            // Some Android 10 builds leave signingInfo empty for archives; the legacy field still works there.
+            @Suppress("DEPRECATION")
+            signers = pm.getPackageArchiveInfo(file.path, PackageManager.GET_SIGNATURES)?.signatures.orEmpty().map { it.sha256() }
+        }
+        return ApkIdentity(info.packageName, info.longVersionCode, signers)
+    }
+
+    private fun installedInfo(): PackageInfo =
+        context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+
+    private fun installedVersionCode(): Long = installedInfo().longVersionCode
+
+    private fun installedSigners(): List<String> = installedInfo().signerDigests()
+
+    /** SHA-256 of each certificate that actually signed the APK contents (not the rotation history). */
+    private fun PackageInfo.signerDigests(): List<String> =
+        signingInfo?.apkContentsSigners.orEmpty().map { it.sha256() }
+
+    private fun Signature.sha256(): String =
+        MessageDigest.getInstance("SHA-256").digest(toByteArray()).joinToString("") { "%02x".format(it) }
 
     fun canInstall(): Boolean = context.packageManager.canRequestPackageInstalls()
 
@@ -150,7 +202,17 @@ class UpdateManager(private val context: Context, private val api: ApiClient, pr
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    fun install(apk: File) {
+    /** Re-checks package, version and signer right before the hand-off: the cached file may be hours old. */
+    suspend fun install(apk: File) {
+        withContext(Dispatchers.IO) {
+            if (!apk.exists()) throw SecurityException("Файл обновления не найден — скачайте заново")
+            try {
+                verifyIdentityOrDelete(apk)
+            } catch (e: SecurityException) {
+                File(apk.path + ".ok").delete()
+                throw e
+            }
+        }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", apk)
         context.startActivity(Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
@@ -188,6 +250,10 @@ class UpdateCheckWorker(context: Context, params: WorkerParameters) : CoroutineW
         if (!c.prefs.isPaired()) return Result.success()  // the release feed is served by our server and needs a token
         val rel = runCatching { c.updates.latest() }.getOrNull() ?: return Result.success()
         if (!c.updates.isNewer(rel.version)) return Result.success()
+        if (!rel.installable) {  // no checksum asset: nothing to offer, the Updates screen explains why
+            AppLog.w("update", "release ${rel.version} has no .sha256 asset")
+            return Result.success()
+        }
         // 27 MB: fetch ahead only on an unmetered network; on mobile data the owner decides.
         val metered = applicationContext.getSystemService(ConnectivityManager::class.java).isActiveNetworkMetered
         val apk = c.updates.ready(rel) ?: if (!metered) c.updates.prefetch(rel) else null

@@ -94,10 +94,15 @@ def _fingerprints(bank: str, account: str | None, rows: list[StatementRow]) -> N
     the same statement yields the same keys while two genuine identical purchases stay distinct."""
     seen: Counter = Counter()
     for r in rows:
-        base = "|".join([
-            bank, account or "", r.occurred_at.strftime("%Y-%m-%dT%H:%M" if r.has_time else "%Y-%m-%d"),
-            str(r.amount_minor), r.direction, re.sub(r"\s+", " ", r.description.lower())[:120], r.bank_op_id or "",
-        ])
+        if r.bank_op_id:
+            # The bank's own operation id is the same whatever the export format (CSV, XLSX, PDF): the same
+            # period exported twice must not become two sets of transactions.
+            base = "|".join([bank, account or "", "op", r.bank_op_id, str(r.amount_minor), r.direction])
+        else:
+            base = "|".join([
+                bank, account or "", r.occurred_at.strftime("%Y-%m-%dT%H:%M" if r.has_time else "%Y-%m-%d"),
+                str(r.amount_minor), r.direction, re.sub(r"\s+", " ", r.description.lower())[:120],
+            ])
         seen[base] += 1
         r.fingerprint = hashlib.sha256(f"{base}|{seen[base]}".encode()).hexdigest()
 

@@ -32,6 +32,7 @@ class Prefs(private val context: Context) {
         val biometricEnabled = booleanPreferencesKey("biometric_enabled")
         val lockTimeoutMin = intPreferencesKey("lock_timeout_min")
         val theme = stringPreferencesKey("theme")
+        /** Encrypted: read/write only through [homeCache], [homeCacheFlow] and [setHomeCache]. */
         val homeCache = stringPreferencesKey("home_cache")
         val firebaseOptions = stringPreferencesKey("firebase_options")
         val fcmToken = stringPreferencesKey("fcm_token")
@@ -76,6 +77,14 @@ class Prefs(private val context: Context) {
     }
 
     suspend fun isPaired(): Boolean = token() != null
+
+    // The /home snapshot carries balances and spending; it is kept in DataStore only wrapped by the Keystore key.
+    // A value that does not decrypt (pre-encryption plaintext, lost key) is treated as "no cache".
+    private fun decodeHome(enc: String?): String? = enc?.let { runCatching { KeyStoreCipher.decryptString(it) }.getOrNull() }
+
+    suspend fun homeCache(): String? = decodeHome(get(Keys.homeCache))
+    fun homeCacheFlow(): Flow<String?> = store.data.map { decodeHome(it[Keys.homeCache]) }
+    suspend fun setHomeCache(json: String?) = set(Keys.homeCache, json?.let { KeyStoreCipher.encryptString(it) })
 
     /** Random 32-byte SQLCipher passphrase, created on first launch and kept wrapped by the Keystore. */
     fun databaseKey(): ByteArray = runBlocking {

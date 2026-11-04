@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent.insights import SHORT_SLEEP_MIN, fmt_minutes, habits_line, habits_status, last_night_sleep
 from agent.persona import MODE_LABELS
 from app.core.money import fmt_rub
 from app.core.timeutil import RU_WEEKDAYS, local_now, parse_hhmm, ru_date, utcnow
@@ -134,6 +135,16 @@ async def build_context(db: AsyncSession, owner_id: uuid.UUID, conversation: Con
         plan_s = ", ".join(f"{RU_WEEKDAYS[p.weekday - 1] if p.weekday else '—'}: {p.name}" for p in plans) or "нет программы"
         last_s = f"{last.started_at.astimezone(now.tzinfo):%d.%m}" if last else "нет записей"
         lines.append(f"Тренировки: программа — {plan_s}. Последняя записанная тренировка: {last_s}.")
+
+    if want_fitness or first_in_segment:
+        # What the watch saw and what the habit list says today: the agent should not have to ask.
+        sleep = await last_night_sleep(db, owner_id, user.timezone if user else None)
+        if sleep is not None:
+            lines.append(f"Сон прошлой ночью по часам: {fmt_minutes(sleep)}"
+                         + (" — мало." if sleep < SHORT_SLEEP_MIN else "."))
+        habits = habits_line(await habits_status(db, owner_id, now.date()))
+        if habits:
+            lines.append(habits)
 
     if want_tasks:
         tasks = (await db.execute(select(Task).where(

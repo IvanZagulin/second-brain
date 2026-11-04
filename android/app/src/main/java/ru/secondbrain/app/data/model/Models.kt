@@ -257,7 +257,8 @@ data class Message(val id: String = "", val conversationId: String = "", val rol
                    val text: String = "", val attachments: List<String> = emptyList(),
                    val toolEvents: JsonArray = JsonArray(emptyList()), val model: String? = null,
                    val costUsd: Double? = null, val status: String = "complete", val source: String = "app",
-                   val createdAt: String? = null)
+                   /** Owner's rating of an agent-initiated message: "useful" | "noise" | null. */
+                   val feedback: String? = null, val createdAt: String? = null)
 
 @Serializable
 data class NotificationItem(val id: String = "", val title: String = "", val body: String = "",

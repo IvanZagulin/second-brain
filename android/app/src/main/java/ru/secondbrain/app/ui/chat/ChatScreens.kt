@@ -37,7 +37,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ThumbDown
+import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ThumbDown
+import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MoreVert
@@ -107,6 +111,7 @@ import ru.secondbrain.app.ui.components.Pill
 import ru.secondbrain.app.ui.components.Screen
 import ru.secondbrain.app.ui.components.Secondary
 import ru.secondbrain.app.ui.components.Spark
+import ru.secondbrain.app.ui.components.rememberAction
 import ru.secondbrain.app.ui.theme.AgentProse
 import ru.secondbrain.app.ui.theme.Tone
 import java.util.UUID
@@ -413,7 +418,37 @@ private fun Bubble(m: Message) {
         }
         else -> {
             val tools = m.toolEvents.mapNotNull { runCatching { it.jsonObject.str("title") }.getOrNull() }
-            AssistantBubble(m.text, tools, relative(parseInstant(m.createdAt)))
+            Column(Modifier.fillMaxWidth()) {
+                AssistantBubble(m.text, tools, relative(parseInstant(m.createdAt)))
+                // Only what the agent wrote on its own (initiative, morning brief, reports) is rated; the rating
+                // steers how often it writes first. Replies to the owner's questions are not.
+                if (m.source == "agent") FeedbackRow(m)
+            }
+        }
+    }
+}
+
+/** 👍 «Полезно» / 👎 «Лишнее» under an agent-initiated message; a second tap on the same icon clears the rating. */
+@Composable
+private fun FeedbackRow(m: Message) {
+    val c = LocalContainer.current
+    val act = rememberAction()
+    fun rate(value: String) = act(null) {
+        val next = if (m.feedback == value) null else value
+        val res = c.api.post("/api/v1/chat/messages/${m.id}/feedback", jsonOf("feedback" to next))
+        c.store.putFromServer(E.MESSAGES, res)
+    }
+    val tone = Tone.current
+    Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = { rate("useful") }, modifier = Modifier.size(34.dp)) {
+            val on = m.feedback == "useful"
+            Icon(if (on) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp, "Полезно", Modifier.size(18.dp),
+                tint = if (on) tone.accent else tone.textSecondary)
+        }
+        IconButton(onClick = { rate("noise") }, modifier = Modifier.size(34.dp)) {
+            val on = m.feedback == "noise"
+            Icon(if (on) Icons.Filled.ThumbDown else Icons.Outlined.ThumbDown, "Лишнее", Modifier.size(18.dp),
+                tint = if (on) tone.accent else tone.textSecondary)
         }
     }
 }

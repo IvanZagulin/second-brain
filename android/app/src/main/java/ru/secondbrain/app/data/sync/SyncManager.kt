@@ -232,18 +232,19 @@ class SyncManager(
         })
         val res = api.post("/api/v1/finance/notifications", jsonOf("items" to items)).jsonObject["results"]!!.jsonArray
         // Match by dedupe_key when the server echoes it; otherwise results are positional and must line up exactly.
+        // Once uploaded, the raw text/title are blanked locally: the server has them, the row stays for dedupe.
         val echoed = res.all { it.jsonObject.str("dedupe_key") != null }
         if (echoed) {
             val byKey = res.associateBy { it.jsonObject.str("dedupe_key")!! }
             for (n in pending) {
                 val r = byKey[n.dedupeKey] ?: continue
-                dao.markUploaded(n.id, r.jsonObject.str("status"))
+                dao.markUploadedAndScrub(n.id, r.jsonObject.str("status"))
             }
         } else {
             if (res.size != pending.size) {
                 throw IllegalStateException("bank upload: sent ${pending.size} notifications, got ${res.size} results")
             }
-            pending.zip(res).forEach { (n, r) -> dao.markUploaded(n.id, r.jsonObject.str("status")) }
+            pending.zip(res).forEach { (n, r) -> dao.markUploadedAndScrub(n.id, r.jsonObject.str("status")) }
         }
         dao.prune(System.currentTimeMillis() - 14L * 24 * 3600 * 1000)
         AppLog.i("sync", "uploaded ${pending.size} bank notifications")
@@ -296,7 +297,7 @@ class SyncManager(
 
     suspend fun refreshHome() {
         runCatching { api.get("/api/v1/home") }.onSuccess {
-            prefs.set(Prefs.Keys.homeCache, it.toString())
+            prefs.setHomeCache(it.toString())
             Widgets.updateAll(context)
         }
     }

@@ -86,6 +86,7 @@ import ru.secondbrain.app.ui.components.TimeField
 import ru.secondbrain.app.ui.components.rememberAction
 import ru.secondbrain.app.ui.components.rememberLoad
 import ru.secondbrain.app.ui.theme.Tone
+import ru.secondbrain.app.update.NO_CHECKSUM_MESSAGE
 import ru.secondbrain.app.update.Release
 import java.time.LocalTime
 
@@ -527,7 +528,11 @@ fun UpdatesScreen() {
                 AppCard(tint = if (newer) Tone.current.finance else Tone.current.surface) {
                     Text(if (newer) "Доступна версия ${r.version}" else "У вас последняя версия (${r.version})", style = MaterialTheme.typography.titleMedium)
                     if (r.notes.isNotBlank()) Markdown(r.notes.take(3000))
-                    if (newer) {
+                    if (newer && !r.installable) {
+                        Text(NO_CHECKSUM_MESSAGE, color = Tone.current.negative)
+                        Secondary("Установка без файла .sha256 невозможна: нечем проверить, что APK не подменён.")
+                    }
+                    if (newer && r.installable) {
                         if (progress >= 0f) ProgressBar(progress)
                         Button(enabled = progress < 0f, onClick = {
                             scope.launch {

@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from agent.initiative import consider
+from agent.insights import SHORT_SLEEP_MIN, fmt_minutes, habits_status, last_night_sleep
 from app.core.db import session_scope
 from app.core.money import fmt_rub
 from app.core.timeutil import local_now, parse_hhmm, utcnow
@@ -193,13 +194,34 @@ async def daily_checks(owner_id: uuid.UUID) -> dict[str, int]:
         # Missed training.
         fit = settings["fitness"]
         missed = False
-        if now_local.isoweekday() in (fit.get("training_days") or []) and \
-                now_local.time() >= parse_hhmm(fit.get("missed_check_time"), "22:30"):
+        training_day = now_local.isoweekday() in (fit.get("training_days") or [])
+        if training_day and now_local.time() >= parse_hhmm(fit.get("missed_check_time"), "22:30"):
             day_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
             had = (await db.execute(select(func.count()).select_from(Workout).where(
                 Workout.owner_id == owner_id, Workout.deleted_at.is_(None), Workout.started_at >= day_start))).scalar_one()
             missed = not had
 
+        # Habits: a run of a week or more that ended yesterday without a mark.
+        broken = [h for h in await habits_status(db, owner_id, today) if h["broken_streak_days"]]
+        # Short night before a training day: once, after the owner is up (the watch syncs in the morning).
+        short_sleep = None
+        if training_day and now_local.time() >= parse_hhmm(settings["schedule"].get("work_start"), "09:00"):
+            sleep = await last_night_sleep(db, owner_id, tz_name)
+            if sleep is not None and sleep < SHORT_SLEEP_MIN:
+                short_sleep = sleep
+
+    for h in broken[:2]:
+        r = await consider(owner_id, f"Сорвана серия привычки «{h['name']}»: {h['broken_streak_days']} дней подряд, вчера отметки нет",
+                           "Спроси, что случилось, без морали, и предложи продолжить сегодня. Если это привычка-отказ "
+                           "(курение, сладкое) — срыв важнее, чем пропуск отметки: уточни, что именно было.",
+                           priority=1, dedupe_key=f"habit_streak:{h['id']}:{today}")
+        sent["habits"] = sent.get("habits", 0) + int(r.get("sent", False))
+    if short_sleep is not None:
+        r = await consider(owner_id, f"Сегодня тренировка, а сон по часам {fmt_minutes(short_sleep)}",
+                           "Коротко: спроси о самочувствии, предложи не повышать веса сегодня и не геройствовать; "
+                           "если спал мало второй день подряд — скажи это прямо.",
+                           priority=1, dedupe_key=f"short_sleep:{today}")
+        sent["short_sleep"] = int(r.get("sent", False))
     if missed:
         r = await consider(owner_id, "Сегодня день тренировки, но тренировка не записана",
                            "Спроси, была ли тренировка (может, забыл записать) и если нет — почему.",

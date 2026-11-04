@@ -35,7 +35,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import ru.secondbrain.app.MainActivity
 import ru.secondbrain.app.SecondBrainApp
-import ru.secondbrain.app.core.Prefs
 import ru.secondbrain.app.core.rub
 import ru.secondbrain.app.data.api.PlainJson
 import ru.secondbrain.app.notifications.AgentNotifier
@@ -55,7 +54,7 @@ object Widgets {
 
 private suspend fun homeCache(context: Context): JsonObject? {
     val prefs = (context.applicationContext as SecondBrainApp).container.prefs
-    return prefs.get(Prefs.Keys.homeCache)?.let { runCatching { PlainJson.parseToJsonElement(it).jsonObject }.getOrNull() }
+    return prefs.homeCache()?.let { runCatching { PlainJson.parseToJsonElement(it).jsonObject }.getOrNull() }
 }
 
 private fun openApp(context: Context, route: String) = actionStartActivity(

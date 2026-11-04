@@ -336,3 +336,41 @@ def test_to_rub_uses_fx_and_keeps_rub():
     assert _to_rub(10_000, "RUB", {"USD": 95.0}) == 10_000
     assert _to_rub(10_000, "USD", {"USD": 95.0}) == 950_000
     assert _to_rub(10_000, "EUR", {"USD": 95.0}) == 10_000  # no rate: face value (and flagged estimated upstream)
+
+
+def test_habit_due_and_streaks():
+    from agent.insights import _streak, habit_due
+
+    mon = date(2026, 11, 2)  # Monday
+    assert habit_due("daily", mon) and habit_due("weekdays", mon) and habit_due("weekly:1,3", mon)
+    assert not habit_due("weekdays", date(2026, 11, 7)) and not habit_due("weekly:1,3", date(2026, 11, 3))
+    done = {date(2026, 10, 27) + timedelta(days=i) for i in range(7)}  # Tue 27.10 … Mon 2.11
+    assert _streak(done, "daily", mon) == 7
+    assert _streak(done, "daily", date(2026, 11, 3)) == 0  # Tuesday has no mark
+    # Weekdays-only: the weekend gap does not break the run.
+    wk = {date(2026, 10, 29), date(2026, 10, 30), date(2026, 11, 2)}  # Thu, Fri, Mon
+    assert _streak(wk, "weekdays", mon) == 3
+
+
+def test_fmt_minutes_and_sniff():
+    from agent.insights import fmt_minutes
+    from app.routers.chat import sniff_mime
+
+    assert fmt_minutes(340) == "5 ч 40 мин" and fmt_minutes(45) == "45 мин" and fmt_minutes(None) == "нет данных"
+    assert sniff_mime(b"\xff\xd8\xff\xe0" + b"\0" * 12) == "image/jpeg"
+    assert sniff_mime(b"RIFF\0\0\0\0WEBPVP8 ") == "image/webp"
+    assert sniff_mime(b"%PDF-1.7\n") == "application/pdf"
+    assert sniff_mime(b"<html>") is None
+
+
+def test_statement_fingerprint_uses_bank_op_id_across_formats():
+    from app.services.finance.statements import StatementRow
+
+    def row(desc, has_time):
+        return StatementRow(occurred_at=datetime(2026, 11, 1, 12, 30, tzinfo=UTC), has_time=has_time,
+                            amount_minor=12345, direction="out", description=desc, bank_op_id="OP-1")
+
+    a, b = [row("Покупка PYATEROCHKA", True)], [row("Пятёрочка, покупка", False)]
+    _fingerprints("sber", "40817", a)
+    _fingerprints("sber", "40817", b)
+    assert a[0].fingerprint == b[0].fingerprint

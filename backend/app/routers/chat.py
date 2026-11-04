@@ -124,6 +124,26 @@ async def messages(conv_id: uuid.UUID, before: datetime | None = None, limit: in
     return {"items": [public_message(m) for m in reversed(rows) if m.role != "assistant" or m.text]}
 
 
+class FeedbackIn(BaseModel):
+    feedback: str | None = Field(None, pattern="^(useful|noise)$")
+
+
+@router.post("/messages/{message_id}/feedback")
+async def rate_message(message_id: uuid.UUID, body: FeedbackIn, auth: Auth = Depends(get_auth),
+                       db: AsyncSession = Depends(get_db)):
+    """«Полезно» / «лишнее» on a message the agent wrote first; the initiative prompt reads the recent ratings."""
+    m = await db.get(Message, message_id)
+    if m is None or m.owner_id != auth.owner_id or m.deleted_at is not None:
+        raise NotFound("Сообщение не найдено")
+    if m.role != "assistant":
+        raise ApiError("Оценить можно только сообщение агента", code="not_agent_message")
+    m.feedback = body.feedback
+    m.version += 1
+    await db.flush()
+    await db.refresh(m)
+    return public_message(m)
+
+
 class SendIn(BaseModel):
     text: str = Field("", max_length=30000)
     attachment_ids: list[uuid.UUID] = Field(default_factory=list)
@@ -205,9 +225,11 @@ async def upload(file: UploadFile = File(...), purpose: str = Form(""), auth: Au
     att_id = uuid.uuid4()
     suffix = Path(file.filename or "").suffix[:10]
     path = folder / f"{att_id}{suffix}"
-    digest, size = hashlib.sha256(), 0
+    digest, size, head = hashlib.sha256(), 0, b""
     with path.open("wb") as out:
         while chunk := await file.read(1 << 20):
+            if not head:
+                head = chunk[:16]
             size += len(chunk)
             if size > 30 * 1024 * 1024:
                 out.close()
@@ -215,6 +237,14 @@ async def upload(file: UploadFile = File(...), purpose: str = Form(""), auth: Au
                 raise ApiError("Файл больше 30 МБ", code="too_large")
             digest.update(chunk)
             out.write(chunk)
+    # The declared type comes from the client; images and PDFs are identified by their bytes instead, and only
+    # the formats Claude accepts get through (HEIC from a Samsung camera would fail later, at the API).
+    sniffed = sniff_mime(head)
+    if mime.startswith("image/") or mime == "application/pdf":
+        if sniffed is None:
+            path.unlink(missing_ok=True)
+            raise ApiError("Файл не похож на JPEG/PNG/WebP/GIF или PDF", code="unsupported_type")
+        mime = sniffed
     kind = "image" if mime.startswith("image/") else "pdf" if mime == "application/pdf" else \
         "audio" if mime.startswith("audio/") else "document"
     if kind == "image" and purpose == "progress":
@@ -231,4 +261,19 @@ async def download(att_id: uuid.UUID, auth: Auth = Depends(get_auth), db: AsyncS
     att = await db.get(Attachment, att_id)
     if att is None or att.owner_id != auth.owner_id:
         raise NotFound("Файл не найден")
-    return FileResponse(att.path, media_type=att.mime, filename=att.file_name)
+    # Always as a download: an uploaded text/html must never render in the API's origin.
+    return FileResponse(att.path, media_type=att.mime, filename=att.file_name or str(att.id),
+                        content_disposition_type="attachment")
+
+
+MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"), (b"GIF87a", "image/gif"),
+         (b"GIF89a", "image/gif"), (b"%PDF", "application/pdf"))
+
+
+def sniff_mime(head: bytes) -> str | None:
+    for magic, mime in MAGIC:
+        if head.startswith(magic):
+            return mime
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return None
