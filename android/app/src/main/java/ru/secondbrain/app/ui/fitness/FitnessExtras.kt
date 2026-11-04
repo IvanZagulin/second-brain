@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,8 +38,6 @@ import androidx.core.content.FileProvider
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.jsonObject
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 import ru.secondbrain.app.core.decimal
 import ru.secondbrain.app.core.local
 import ru.secondbrain.app.core.nowIso
@@ -64,6 +63,7 @@ import ru.secondbrain.app.ui.components.ListRow
 import ru.secondbrain.app.ui.components.Loading
 import ru.secondbrain.app.ui.components.LocalContainer
 import ru.secondbrain.app.data.api.ApiException
+import ru.secondbrain.app.data.api.UriUploader
 import ru.secondbrain.app.ui.components.LocalSnackbar
 import ru.secondbrain.app.ui.components.LocalNavigate
 import ru.secondbrain.app.ui.components.Screen
@@ -84,7 +84,7 @@ val METRIC_KINDS = linkedMapOf("weight" to "Вес, кг", "waist" to "Тали�
 fun MetricsScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val metrics by c.store.observe(E.METRICS, BodyMetric.serializer()).collectAsState(initial = emptyList())
+    val metrics by remember { c.store.observe(E.METRICS, BodyMetric.serializer()) }.collectAsState(initial = emptyList())
     var kind by remember { mutableStateOf("weight") }
     var adding by remember { mutableStateOf(false) }
     val series = metrics.filter { it.kind == kind }.sortedBy { it.measuredAt ?: "" }
@@ -134,13 +134,13 @@ fun PhotosScreen() {
     val nav = LocalNavigate.current
     val context = LocalContext.current
     val act = rememberAction()
-    val scope = rememberCoroutineScope()
-    val photos by c.store.observe(E.PHOTOS, ProgressPhoto.serializer()).collectAsState(initial = emptyList())
-    var pending by remember { mutableStateOf<File?>(null) }
-    var pose by remember { mutableStateOf("front") }
+    val photos by remember { c.store.observe(E.PHOTOS, ProgressPhoto.serializer()) }.collectAsState(initial = emptyList())
+    // The path, not the File: the camera app may push this process out of memory, and the capture must survive that.
+    var pendingPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var pose by rememberSaveable { mutableStateOf("front") }
     val selected = remember { mutableStateListOf<String>() }
     val take = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        val f = pending ?: return@rememberLauncherForActivityResult
+        val f = pendingPath?.let { File(it) } ?: return@rememberLauncherForActivityResult
         if (ok) act("Фото сохранено") {
             c.store.save(E.PHOTOS, jsonOf("taken_at" to nowIso(), "pose" to pose, "local_path" to f.absolutePath))
         }
@@ -150,7 +150,7 @@ fun PhotosScreen() {
         fab = {
             ExtendedFloatingActionButton(onClick = {
                 val f = File(context.filesDir, "photos/form-${System.currentTimeMillis()}.jpg").apply { parentFile?.mkdirs() }
-                pending = f
+                pendingPath = f.absolutePath
                 take.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", f))
             }, icon = { Icon(Icons.Outlined.PhotoCamera, null) }, text = { Text("Снять") })
         }) {
@@ -170,10 +170,9 @@ fun PhotosScreen() {
                     }
                 }
                 OutlinedButton(onClick = {
-                    scope.launch {
+                    act(null) {
                         val ids = listOf(a, b).map { p ->
-                            val f = File(p.localPath!!)
-                            c.api.upload("/api/v1/chat/attachments", f.name, "image/jpeg", f.readBytes().toRequestBody("image/jpeg".toMediaTypeOrNull()),
+                            UriUploader.uploadFile(c.api, "/api/v1/chat/attachments", File(p.localPath!!), "image/jpeg",
                                 mapOf("purpose" to "progress")).jsonObject.str("id")!!
                         }
                         val conv = c.chat.newConversation("trainer", "Сравнение формы")
@@ -208,7 +207,7 @@ fun NutritionScreen() {
     val context = LocalContext.current
     val act = rememberAction()
     val scope = rememberCoroutineScope()
-    val meals by c.store.observe(E.MEALS, Meal.serializer()).collectAsState(initial = emptyList())
+    val meals by remember { c.store.observe(E.MEALS, Meal.serializer()) }.collectAsState(initial = emptyList())
     val nav = LocalNavigate.current
     val snackbar = LocalSnackbar.current
     val allSettings = rememberLoad { c.api.get("/api/v1/settings").jsonObject }
@@ -216,10 +215,11 @@ fun NutritionScreen() {
     // Meal photos are shown nowhere in the app: without image analysis they would only sit on the server.
     val imagesAllowed = allSettings.value?.get("privacy")?.jsonObject?.str("allow_image_analysis") == "true"
     var mode by remember(settings) { mutableStateOf(settings?.str("nutrition_mode") ?: "off") }
-    var description by remember { mutableStateOf("") }
-    var photo by remember { mutableStateOf<File?>(null) }
+    var description by rememberSaveable { mutableStateOf("") }
+    var photoPath by rememberSaveable { mutableStateOf<String?>(null) }
+    val photo = photoPath?.let { File(it) }
     var busy by remember { mutableStateOf(false) }
-    val take = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if (!ok) photo = null }
+    val take = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if (!ok) photoPath = null }
     val today = meals.filter { parseInstant(it.eatenAt)?.local()?.toLocalDate() == LocalDate.now() }
     Screen("Питание") {
         item {
@@ -246,7 +246,7 @@ fun NutritionScreen() {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (imagesAllowed) OutlinedButton(onClick = {
                         val f = File(context.cacheDir, "captures/meal-${System.currentTimeMillis()}.jpg").apply { parentFile?.mkdirs() }
-                        photo = f
+                        photoPath = f.absolutePath
                         take.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", f))
                     }) { Text(if (photo != null) "Фото есть ✓" else "Фото") }
                     Button(enabled = !busy && (description.isNotBlank() || photo != null), onClick = {
@@ -254,17 +254,17 @@ fun NutritionScreen() {
                             busy = true
                             try {
                                 val attId = photo?.takeIf { it.exists() }?.let { f ->
-                                    c.api.upload("/api/v1/chat/attachments", f.name, "image/jpeg", f.readBytes().toRequestBody("image/jpeg".toMediaTypeOrNull())).jsonObject.str("id")
+                                    UriUploader.uploadFile(c.api, "/api/v1/chat/attachments", f, "image/jpeg").jsonObject.str("id")
                                 }
                                 c.api.post("/api/v1/health/meals/estimate", jsonOf("description" to description.ifBlank { null },
                                     "attachment_id" to attId, "estimate" to (mode != "off")))
-                                description = ""; photo = null
+                                description = ""; photoPath = null
                                 c.sync.syncNow()
                             } catch (e: ApiException) {
                                 if (e.isOffline) {
                                     // No network: keep the meal without an estimate; it syncs later.
                                     c.store.save(E.MEALS, jsonOf("eaten_at" to nowIso(), "description" to description, "estimated_by" to "user"))
-                                    description = ""; photo = null
+                                    description = ""; photoPath = null
                                     snackbar.showSnackbar("Нет связи: записано без оценки")
                                 } else snackbar.showSnackbar(e.message ?: "Не удалось оценить")
                             } catch (e: Exception) {

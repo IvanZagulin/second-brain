@@ -158,7 +158,7 @@ fun SettingsScreen() {
     }
     if (unpair) ConfirmDialog("Отключить устройство?", "Локальные данные будут удалены с телефона (на сервере всё останется). Для повторного входа понадобится новый код.", "Отключить",
         onConfirm = {
-            scope.launch {
+            act(null) {
                 runCatching { val me = c.api.get("/api/v1/auth/me").jsonObject; c.api.post("/api/v1/auth/devices/${me["device"]!!.jsonObject.str("id")}/revoke") }
                 c.wipeLocal()
                 (c.context as? SecondBrainApp)?.let { android.os.Process.killProcess(android.os.Process.myPid()) }

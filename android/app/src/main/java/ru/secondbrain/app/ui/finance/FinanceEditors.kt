@@ -98,8 +98,8 @@ fun TransactionScreen(id: String?) {
         if (id != null) c.store.observeOne(E.TRANSACTIONS, id, Transaction.serializer()) else kotlinx.coroutines.flow.flowOf(null)
     }
     val existing by existingFlow.collectAsState(initial = null)
-    val accounts by c.store.observe(E.ACCOUNTS, Account.serializer()).collectAsState(initial = emptyList())
-    val cats by c.store.observe(E.CATEGORIES, BudgetCategory.serializer()).collectAsState(initial = emptyList())
+    val accounts by remember { c.store.observe(E.ACCOUNTS, Account.serializer()) }.collectAsState(initial = emptyList())
+    val cats by remember { c.store.observe(E.CATEGORIES, BudgetCategory.serializer()) }.collectAsState(initial = emptyList())
     var amount by remember { mutableStateOf("") }
     var direction by remember { mutableStateOf("out") }
     var flow by remember { mutableStateOf("expense") }
@@ -206,7 +206,7 @@ fun originLabel(s: String) = mapOf("manual" to "вручную", "notification" 
 fun AccountsScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val accounts by c.store.observe(E.ACCOUNTS, Account.serializer()).collectAsState(initial = emptyList())
+    val accounts by remember { c.store.observe(E.ACCOUNTS, Account.serializer()) }.collectAsState(initial = emptyList())
     val summary = rememberLoad { c.api.get("/api/v1/finance/summary").jsonObject }
     val balances = summary.value?.get("accounts")?.jsonArray?.associate { it.jsonObject.str("id") to it.jsonObject } ?: emptyMap()
     var editing by remember { mutableStateOf<Account?>(null) }
@@ -260,7 +260,7 @@ fun AccountsScreen() {
 fun CategoriesScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val cats by c.store.observe(E.CATEGORIES, BudgetCategory.serializer()).collectAsState(initial = emptyList())
+    val cats by remember { c.store.observe(E.CATEGORIES, BudgetCategory.serializer()) }.collectAsState(initial = emptyList())
     val rules = rememberLoad { c.api.get("/api/v1/finance/rules").jsonObject["items"]!!.jsonArray.map { it.jsonObject } }
     var editing by remember { mutableStateOf<BudgetCategory?>(null) }
     Screen("Категории", fab = { ExtendedFloatingActionButton(onClick = { editing = BudgetCategory() }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Категория") }) }) {
@@ -312,7 +312,7 @@ fun CategoriesScreen() {
 fun SubscriptionsScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val subs by c.store.observe(E.SUBSCRIPTIONS, Subscription.serializer()).collectAsState(initial = emptyList())
+    val subs by remember { c.store.observe(E.SUBSCRIPTIONS, Subscription.serializer()) }.collectAsState(initial = emptyList())
     val suggestions = rememberLoad { c.api.get("/api/v1/finance/subscriptions/suggestions").jsonObject["items"]!!.jsonArray.map { it.jsonObject } }
     var editing by remember { mutableStateOf<Subscription?>(null) }
     val active = subs.filter { it.isActive }
@@ -390,8 +390,8 @@ fun periodLabel(p: String) = mapOf("weekly" to "еженедельно", "monthl
 fun DebtsScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val debts by c.store.observe(E.DEBTS, Debt.serializer()).collectAsState(initial = emptyList())
-    val payments by c.store.observe(E.DEBT_PAYMENTS, DebtPayment.serializer()).collectAsState(initial = emptyList())
+    val debts by remember { c.store.observe(E.DEBTS, Debt.serializer()) }.collectAsState(initial = emptyList())
+    val payments by remember { c.store.observe(E.DEBT_PAYMENTS, DebtPayment.serializer()) }.collectAsState(initial = emptyList())
     var editing by remember { mutableStateOf<Debt?>(null) }
     var paying by remember { mutableStateOf<Debt?>(null) }
     val active = debts.filter { it.status != "closed" }
@@ -491,7 +491,7 @@ fun debtStatus(s: String) = mapOf("active" to "активен", "holiday" to "к
 fun GoalsScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val goals by c.store.observe(E.GOALS, FinancialGoal.serializer()).collectAsState(initial = emptyList())
+    val goals by remember { c.store.observe(E.GOALS, FinancialGoal.serializer()) }.collectAsState(initial = emptyList())
     var editing by remember { mutableStateOf<FinancialGoal?>(null) }
     var adding by remember { mutableStateOf<FinancialGoal?>(null) }
     Screen("Цели", fab = { ExtendedFloatingActionButton(onClick = { editing = FinancialGoal() }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Цель") }) }) {
@@ -561,7 +561,7 @@ fun GoalsScreen() {
 fun TaxesScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val taxes by c.store.observe(E.TAXES, TaxPayment.serializer()).collectAsState(initial = emptyList())
+    val taxes by remember { c.store.observe(E.TAXES, TaxPayment.serializer()) }.collectAsState(initial = emptyList())
     val settings = rememberLoad { c.api.get("/api/v1/settings").jsonObject }
     val tax = settings.value?.get("finance")?.jsonObject?.get("tax")?.jsonObject
     var regime by remember(tax) { mutableStateOf(tax?.str("regime") ?: "usn6") }
@@ -631,7 +631,7 @@ fun ReviewScreen() {
     val nav = LocalNavigate.current
     val act = rememberAction()
     val data = rememberLoad { c.api.get("/api/v1/finance/review").jsonObject }
-    val cats by c.store.observe(E.CATEGORIES, BudgetCategory.serializer()).collectAsState(initial = emptyList())
+    val cats by remember { c.store.observe(E.CATEGORIES, BudgetCategory.serializer()) }.collectAsState(initial = emptyList())
     val catMap = cats.associateBy { it.id }
     Screen("Проверка операций", onRefresh = { data.reload() }) {
         val d = data.value
@@ -686,7 +686,7 @@ fun ReviewScreen() {
 fun WishlistScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val items by c.store.observe(E.WISHLIST, WishlistItem.serializer()).collectAsState(initial = emptyList())
+    val items by remember { c.store.observe(E.WISHLIST, WishlistItem.serializer()) }.collectAsState(initial = emptyList())
     var title by remember { mutableStateOf("") }
     var price by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }

@@ -1,8 +1,5 @@
 package ru.secondbrain.app.ui
 
-import android.os.Build
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,7 +30,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -42,7 +38,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -55,6 +50,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import ru.secondbrain.app.AppContainer
+import ru.secondbrain.app.core.BiometricGate
 import ru.secondbrain.app.core.Prefs
 import kotlinx.coroutines.launch
 import ru.secondbrain.app.health.HealthSync
@@ -156,17 +152,17 @@ fun AppRoot(container: AppContainer, activity: FragmentActivity, pendingRoute: M
 /** Biometric lock on start and after the app was in background longer than the timeout. */
 @Composable
 private fun Locked(container: AppContainer, activity: FragmentActivity, content: @Composable () -> Unit) {
-    val enabled by container.prefs.flow(Prefs.Keys.biometricEnabled).collectAsState(initial = null)
-    val timeout by container.prefs.flow(Prefs.Keys.lockTimeoutMin).collectAsState(initial = 5)
-    var unlocked by remember { mutableStateOf(false) }
-    var backgroundAt by remember { mutableLongStateOf(0L) }
+    val enabled by remember { container.prefs.flow(Prefs.Keys.biometricEnabled) }.collectAsState(initial = null)
+    val timeout by remember { container.prefs.flow(Prefs.Keys.lockTimeoutMin) }.collectAsState(initial = 5)
+    // App-scoped (not remembered here): a rotation or theme change recreates this composable but must not re-prompt.
+    val lock = container.lock
 
     DisposableEffect(Unit) {
         val observer = object : DefaultLifecycleObserver {
-            override fun onStop(owner: LifecycleOwner) { backgroundAt = System.currentTimeMillis() }
+            override fun onStop(owner: LifecycleOwner) { lock.backgroundAt = System.currentTimeMillis() }
             override fun onStart(owner: LifecycleOwner) {
                 val limit = (timeout ?: 5) * 60_000L
-                if (backgroundAt > 0 && System.currentTimeMillis() - backgroundAt > limit) unlocked = false
+                if (lock.backgroundAt > 0 && System.currentTimeMillis() - lock.backgroundAt > limit) lock.unlocked = false
             }
         }
         ProcessLifecycleOwner.get().lifecycle.addObserver(observer)
@@ -174,20 +170,14 @@ private fun Locked(container: AppContainer, activity: FragmentActivity, content:
     }
 
     fun prompt() {
-        val authenticators = if (Build.VERSION.SDK_INT >= 30)
-            BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        else BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        if (BiometricManager.from(activity).canAuthenticate(authenticators) != BiometricManager.BIOMETRIC_SUCCESS) {
-            unlocked = true  // no biometrics and no screen lock on the device: nothing to check against
+        if (!BiometricGate.available(activity)) {
+            lock.unlocked = true  // no biometrics and no screen lock on the device: nothing to check against
             return
         }
-        val bp = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { unlocked = true }
-        })
-        bp.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Второй мозг")
-            .setSubtitle("Подтвердите, что это вы").setAllowedAuthenticators(authenticators).build())
+        BiometricGate.prompt(activity, subtitle = "Подтвердите, что это вы") { ok -> if (ok) lock.unlocked = true }
     }
 
+    val unlocked = lock.unlocked
     when {
         enabled == null -> Box(Modifier.fillMaxSize())
         enabled == false || unlocked -> content()

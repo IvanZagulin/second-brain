@@ -29,7 +29,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,7 +36,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -94,11 +92,11 @@ import java.time.LocalDate
 fun FitnessScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
-    val scope = rememberCoroutineScope()
-    val plans by c.store.observe(E.PLANS, WorkoutPlan.serializer()).collectAsState(initial = emptyList())
-    val workouts by c.store.observe(E.WORKOUTS, Workout.serializer()).collectAsState(initial = emptyList())
-    val metrics by c.store.observe(E.METRICS, BodyMetric.serializer()).collectAsState(initial = emptyList())
-    val planItems by c.store.observe(E.PLAN_EXERCISES, PlanExercise.serializer()).collectAsState(initial = emptyList())
+    val act = rememberAction()
+    val plans by remember { c.store.observe(E.PLANS, WorkoutPlan.serializer()) }.collectAsState(initial = emptyList())
+    val workouts by remember { c.store.observe(E.WORKOUTS, Workout.serializer()) }.collectAsState(initial = emptyList())
+    val metrics by remember { c.store.observe(E.METRICS, BodyMetric.serializer()) }.collectAsState(initial = emptyList())
+    val planItems by remember { c.store.observe(E.PLAN_EXERCISES, PlanExercise.serializer()) }.collectAsState(initial = emptyList())
     val settings = rememberLoad { c.api.get("/api/v1/settings").jsonObject["fitness"]!!.jsonObject }
     val health = rememberLoad { c.api.get("/api/v1/health/summary", mapOf("days" to 7)).jsonObject }
     val trainingDays = settings.value?.get("training_days")?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull?.toIntOrNull() }
@@ -114,7 +112,7 @@ fun FitnessScreen() {
     val nextPlan = nextDay?.let { d -> plans.firstOrNull { it.weekday == d.dayOfWeek.value && it.isActive } }
 
     fun start(plan: WorkoutPlan?) {
-        scope.launch {
+        act(null) {
             val id = c.store.save(E.WORKOUTS, jsonOf("plan_id" to plan?.id, "started_at" to nowIso(), "status" to "in_progress"))
             nav("fitness/workout/$id")
         }
@@ -224,7 +222,7 @@ fun FitnessScreen() {
         ChoiceChips(listOf("Болею", "Нет времени", "Устал", "Другое").map { it to it }, reason, { reason = it })
         if (reason == "Другое") Field(other, { other = it }, "Что случилось")
         Button(onClick = {
-            scope.launch {
+            act(null) {
                 c.store.save(E.WORKOUTS, jsonOf("plan_id" to nextPlan?.id, "started_at" to nowIso(), "status" to "skipped",
                     "skip_reason" to (if (reason == "Другое") other.ifBlank { null } else reason.lowercase())))
                 skipping = false
@@ -239,7 +237,7 @@ fun FitnessScreen() {
         Label("День недели")
         ChoiceChips(listOf<Pair<Int?, String>>(null to "Любой") + (1..7).map { it to ruWeekdayShort(it) }, weekday, { weekday = it })
         Button(onClick = {
-            scope.launch {
+            act(null) {
                 val id = c.store.save(E.PLANS, jsonOf("name" to name, "weekday" to weekday, "is_active" to true))
                 newPlan = false
                 nav("fitness/plan/$id")
@@ -256,12 +254,12 @@ fun WorkoutScreen(id: String) {
     val back = LocalBack.current
     val act = rememberAction()
     val haptic = LocalHapticFeedback.current
-    val workout by c.store.observeOne(E.WORKOUTS, id, Workout.serializer()).collectAsState(initial = null)
-    val plans by c.store.observe(E.PLANS, WorkoutPlan.serializer()).collectAsState(initial = emptyList())
-    val planItems by c.store.observe(E.PLAN_EXERCISES, PlanExercise.serializer()).collectAsState(initial = emptyList())
-    val exercises by c.store.observe(E.EXERCISES, Exercise.serializer()).collectAsState(initial = emptyList())
-    val allSets by c.store.observe(E.SETS, WorkoutSet.serializer()).collectAsState(initial = emptyList())
-    val allWorkouts by c.store.observe(E.WORKOUTS, Workout.serializer()).collectAsState(initial = emptyList())
+    val workout by remember(id) { c.store.observeOne(E.WORKOUTS, id, Workout.serializer()) }.collectAsState(initial = null)
+    val plans by remember { c.store.observe(E.PLANS, WorkoutPlan.serializer()) }.collectAsState(initial = emptyList())
+    val planItems by remember { c.store.observe(E.PLAN_EXERCISES, PlanExercise.serializer()) }.collectAsState(initial = emptyList())
+    val exercises by remember { c.store.observe(E.EXERCISES, Exercise.serializer()) }.collectAsState(initial = emptyList())
+    val allSets by remember { c.store.observe(E.SETS, WorkoutSet.serializer()) }.collectAsState(initial = emptyList())
+    val allWorkouts by remember { c.store.observe(E.WORKOUTS, Workout.serializer()) }.collectAsState(initial = emptyList())
     val w = workout ?: return Screen("Тренировка") { item { Secondary("Загрузка…") } }
     val sets = allSets.filter { it.workoutId == id }.sortedBy { it.doneAt ?: "" }
     val exById = exercises.associateBy { it.id }
@@ -434,9 +432,9 @@ fun PlanScreen(id: String) {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
     val act = rememberAction()
-    val plan by c.store.observeOne(E.PLANS, id, WorkoutPlan.serializer()).collectAsState(initial = null)
-    val items by c.store.observeChildren(E.PLAN_EXERCISES, id, PlanExercise.serializer()).collectAsState(initial = emptyList())
-    val exercises by c.store.observe(E.EXERCISES, Exercise.serializer()).collectAsState(initial = emptyList())
+    val plan by remember(id) { c.store.observeOne(E.PLANS, id, WorkoutPlan.serializer()) }.collectAsState(initial = null)
+    val items by remember(id) { c.store.observeChildren(E.PLAN_EXERCISES, id, PlanExercise.serializer()) }.collectAsState(initial = emptyList())
+    val exercises by remember { c.store.observe(E.EXERCISES, Exercise.serializer()) }.collectAsState(initial = emptyList())
     val revisions = rememberLoad(id) { c.api.get("/api/v1/workouts/plans/$id/revisions").jsonObject["items"]!!.jsonArray.map { it.jsonObject } }
     var editItem by remember { mutableStateOf<PlanExercise?>(null) }
     var adding by remember { mutableStateOf(false) }

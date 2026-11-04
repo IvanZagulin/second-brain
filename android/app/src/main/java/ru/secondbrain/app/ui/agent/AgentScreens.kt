@@ -50,7 +50,7 @@ fun AgentHistoryScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
     val act = rememberAction()
-    val actions by c.store.observe(E.ACTIONS, AgentAction.serializer()).collectAsState(initial = emptyList())
+    val actions by remember { c.store.observe(E.ACTIONS, AgentAction.serializer()) }.collectAsState(initial = emptyList())
     var filter by remember { mutableStateOf("all") }
     val pending = actions.filter { it.status == "pending_confirmation" }
     val shown = (if (filter == "pending") pending else actions).sortedByDescending { it.createdAt ?: "" }.take(200)
@@ -89,7 +89,7 @@ fun actionStatus(s: String) = mapOf("done" to "выполнено", "pending_con
 fun AgentJobsScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val jobs by c.store.observe(E.JOBS, AgentJob.serializer()).collectAsState(initial = emptyList())
+    val jobs by remember { c.store.observe(E.JOBS, AgentJob.serializer()) }.collectAsState(initial = emptyList())
     val events = rememberLoad { c.api.get("/api/v1/agent/events", mapOf("limit" to 50)).jsonObject["items"]!!.jsonArray.map { it.jsonObject } }
     val scheduled = jobs.filter { it.status in setOf("scheduled", "queued", "running", "paused") }.sortedBy { it.nextRunAt ?: "" }
     Screen("Задания агента", onRefresh = { c.sync.syncNow(); events.reload() }) {

@@ -27,6 +27,7 @@ import ru.secondbrain.app.data.repo.str
 import ru.secondbrain.app.data.sync.SyncManager
 import ru.secondbrain.app.health.HealthSync
 import ru.secondbrain.app.notifications.AgentNotifier
+import ru.secondbrain.app.ui.LockState
 import ru.secondbrain.app.update.UpdateManager
 import java.io.File
 
@@ -57,6 +58,7 @@ class AppContainer(val context: Context) {
     val sync: SyncManager by lazy { SyncManager(context, api, db, prefs, store, notifier, onRevoked = { wipeLocal() }) }
     val chat: ChatRepository by lazy { ChatRepository(api, db, store, sync) }
     val updates: UpdateManager by lazy { UpdateManager(context, api, prefs) }
+    val lock = LockState()
 
     @Volatile private var packagesCache: Set<String>? = null
 

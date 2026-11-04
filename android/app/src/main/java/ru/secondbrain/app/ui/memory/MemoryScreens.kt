@@ -1,7 +1,6 @@
 package ru.secondbrain.app.ui.memory
 
 import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -40,13 +39,9 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import okhttp3.MediaType
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody
-import okio.BufferedSink
-import okio.source
 import ru.secondbrain.app.core.parseInstant
 import ru.secondbrain.app.core.relative
+import ru.secondbrain.app.data.api.UriUploader
 import ru.secondbrain.app.data.model.E
 import ru.secondbrain.app.data.model.LifeEvent
 import ru.secondbrain.app.data.model.MEMORY_CATEGORIES
@@ -86,7 +81,7 @@ fun MemoryScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
     val act = rememberAction()
-    val memories by c.store.observe(E.MEMORIES, Memory.serializer()).collectAsState(initial = emptyList())
+    val memories by remember { c.store.observe(E.MEMORIES, Memory.serializer()) }.collectAsState(initial = emptyList())
     val stats = rememberLoad { c.api.get("/api/v1/memories/stats").jsonObject }
     val questions = rememberLoad { c.api.get("/api/v1/memories/questions/open").jsonObject["items"]!!.jsonArray.size }
     var type by remember { mutableStateOf<String?>(null) }
@@ -243,7 +238,7 @@ fun PeopleScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
     val act = rememberAction()
-    val people by c.store.observe(E.PEOPLE, Person.serializer()).collectAsState(initial = emptyList())
+    val people by remember { c.store.observe(E.PEOPLE, Person.serializer()) }.collectAsState(initial = emptyList())
     var adding by remember { mutableStateOf(false) }
     Screen("Люди", fab = { ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Человек") }) }) {
         item { Secondary("Карточки — это ваш взгляд и наблюдения агента, а не объективные характеристики людей.") }
@@ -271,9 +266,8 @@ fun PersonScreen(id: String) {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
     val act = rememberAction()
-    val scope = rememberCoroutineScope()
-    val person by c.store.observeOne(E.PEOPLE, id, Person.serializer()).collectAsState(initial = null)
-    val events by c.store.observe(E.EVENTS, LifeEvent.serializer()).collectAsState(initial = emptyList())
+    val person by remember(id) { c.store.observeOne(E.PEOPLE, id, Person.serializer()) }.collectAsState(initial = null)
+    val events by remember { c.store.observe(E.EVENTS, LifeEvent.serializer()) }.collectAsState(initial = emptyList())
     val p = person ?: return Screen("Человек") { item { Secondary("Загрузка…") } }
     var relation by remember(p.id) { mutableStateOf(p.relation ?: "") }
     var description by remember(p.id) { mutableStateOf(p.description ?: "") }
@@ -291,14 +285,14 @@ fun PersonScreen(id: String) {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
-                    scope.launch {
+                    act(null) {
                         val conv = c.chat.newConversation("psych", "Отношения: ${p.name}")
                         c.chat.queueMessage(conv, "Разбери мои отношения с ${p.name}: что повторяется, где я ошибаюсь, что с нерешёнными вопросами.", mode = "psych")
                         nav("chat/$conv")
                     }
                 }) { Text("Разобрать с агентом") }
                 OutlinedButton(onClick = {
-                    scope.launch {
+                    act(null) {
                         val conv = c.chat.newConversation("psych", "Подготовка к разговору: ${p.name}")
                         nav("chat/$conv")
                     }
@@ -342,7 +336,7 @@ fun PersonScreen(id: String) {
         title = { Text("Убрать ${p.name}?") },
         text = { Text("Карточка пропадёт из «Людей», и агент не будет заводить её снова. Воспоминания, где упоминается этот человек, останутся.") },
         confirmButton = {
-            TextButton(onClick = { confirmRemove = false; scope.launch { c.store.delete(E.PEOPLE, id); back() } }) { Text("Убрать") }
+            TextButton(onClick = { confirmRemove = false; act(null) { c.store.delete(E.PEOPLE, id); back() } }) { Text("Убрать") }
         },
         dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Отмена") } })
 }
@@ -402,16 +396,6 @@ fun SourcesScreen() {
     }
 }
 
-/** Streams a picked file to the server without loading it into memory (archives can be gigabytes). */
-private class UriBody(private val context: android.content.Context, private val uri: Uri, private val type: MediaType?,
-                      private val length: Long) : RequestBody() {
-    override fun contentType() = type
-    override fun contentLength() = length
-    override fun writeTo(sink: BufferedSink) {
-        context.contentResolver.openInputStream(uri)!!.source().use { sink.writeAll(it) }
-    }
-}
-
 @Composable
 fun ImportsScreen() {
     val c = LocalContainer.current
@@ -427,16 +411,9 @@ fun ImportsScreen() {
         scope.launch {
             uploading = true; error = null
             try {
-                var name = "export"
-                var size = -1L
-                context.contentResolver.query(uri, null, null, null, null)?.use { cur ->
-                    if (cur.moveToFirst()) {
-                        cur.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name = cur.getString(it) }
-                        cur.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = cur.getLong(it) }
-                    }
-                }
-                val type = (context.contentResolver.getType(uri) ?: "application/octet-stream").toMediaTypeOrNull()
-                val job = c.api.upload("/api/v1/imports", name, type.toString(), UriBody(context, uri, type, size), mapOf("kind" to kind)).jsonObject
+                val cr = context.contentResolver
+                val job = UriUploader.upload(c.api, cr, "/api/v1/imports", uri, mapOf("kind" to kind),
+                    name = UriUploader.displayName(cr, uri, fallback = "export")).jsonObject
                 nav("memory/import/${job.str("id")}")
             } catch (e: Exception) { error = e.message }
             uploading = false

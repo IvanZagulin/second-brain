@@ -146,12 +146,15 @@ private fun Balances(next: () -> Unit) {
     }
     Button(modifier = Modifier.fillMaxWidth(), onClick = {
         scope.launch {
-            values.forEach { (id, text) ->
-                val minor = parseRubToMinor(text) ?: return@forEach
-                c.store.save(E.ACCOUNTS, jsonOf("balance_minor" to minor, "balance_at" to nowIso(),
-                    "balance_source" to "manual"), id)
+            // The balances are saved locally; the sync is best effort here, the next one picks them up anyway.
+            runCatching {
+                values.forEach { (id, text) ->
+                    val minor = parseRubToMinor(text) ?: return@forEach
+                    c.store.save(E.ACCOUNTS, jsonOf("balance_minor" to minor, "balance_at" to nowIso(),
+                        "balance_source" to "manual"), id)
+                }
+                c.sync.syncNow()
             }
-            c.sync.syncNow()
             next()
         }
     }) { Text("Дальше") }

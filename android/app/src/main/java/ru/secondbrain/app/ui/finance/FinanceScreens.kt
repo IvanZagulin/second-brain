@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -48,8 +49,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 import ru.secondbrain.app.core.daysWord
 import ru.secondbrain.app.core.local
 import ru.secondbrain.app.core.parseDate
@@ -57,6 +56,7 @@ import ru.secondbrain.app.core.parseInstant
 import ru.secondbrain.app.core.relative
 import ru.secondbrain.app.core.ruDate
 import ru.secondbrain.app.core.rub
+import ru.secondbrain.app.data.api.UriUploader
 import ru.secondbrain.app.data.model.BudgetCategory
 import ru.secondbrain.app.data.model.E
 import ru.secondbrain.app.data.model.Transaction
@@ -84,11 +84,12 @@ import ru.secondbrain.app.ui.components.rememberLoad
 import ru.secondbrain.app.ui.theme.Tone
 import java.io.File
 import java.time.LocalDate
+import java.time.ZoneOffset
 
 @Composable
 fun categoriesMap(): Map<String, BudgetCategory> {
     val c = LocalContainer.current
-    val cats by c.store.observe(E.CATEGORIES, BudgetCategory.serializer()).collectAsState(initial = emptyList())
+    val cats by remember { c.store.observe(E.CATEGORIES, BudgetCategory.serializer()) }.collectAsState(initial = emptyList())
     return cats.associateBy { it.id }
 }
 
@@ -101,16 +102,18 @@ fun FinanceScreen() {
     val scope = rememberCoroutineScope()
     val summary = rememberLoad { c.api.get("/api/v1/finance/summary").jsonObject }
     val review = rememberLoad { c.api.get("/api/v1/finance/review").jsonObject }
-    val txs by c.store.observe(E.TRANSACTIONS, Transaction.serializer()).collectAsState(initial = emptyList())
+    // Only the latest few are shown here; the full table is for "Все".
+    val txs by remember { c.store.observeLatest(E.TRANSACTIONS, 40, Transaction.serializer()) }.collectAsState(initial = emptyList())
     val cats = categoriesMap()
-    var photoFile by remember { mutableStateOf<File?>(null) }
+    // The path, not the File: the camera app may push this process out of memory, and the capture must survive that.
+    var photoPath by rememberSaveable { mutableStateOf<String?>(null) }
 
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        val f = photoFile ?: return@rememberLauncherForActivityResult
+        val f = photoPath?.let { File(it) } ?: return@rememberLauncherForActivityResult
         if (!ok) return@rememberLauncherForActivityResult
         scope.launch {
             try {
-                val res = c.api.upload("/api/v1/chat/attachments", f.name, "image/jpeg", f.readBytes().toRequestBody("image/jpeg".toMediaTypeOrNull())).jsonObject
+                val res = UriUploader.uploadFile(c.api, "/api/v1/chat/attachments", f, "image/jpeg").jsonObject
                 val r = c.api.post("/api/v1/finance/receipts/attachment", jsonOf("attachment_id" to res.str("id"))).jsonObject
                 snackbar.showSnackbar("Чек распознан: ${rub(r["total_minor"]?.jsonPrimitive?.longOrNull)} ${r.str("store") ?: ""}")
                 c.sync.requestSync(0)
@@ -153,7 +156,7 @@ fun FinanceScreen() {
                 AssistChip(onClick = { scanQr() }, label = { Text("QR чека") }, leadingIcon = { Icon(Icons.Outlined.QrCodeScanner, null) })
                 AssistChip(onClick = {
                     val f = File(context.cacheDir, "captures/receipt-${System.currentTimeMillis()}.jpg").apply { parentFile?.mkdirs() }
-                    photoFile = f
+                    photoPath = f.absolutePath
                     takePhoto.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", f))
                 }, label = { Text("Фото чека") }, leadingIcon = { Icon(Icons.Outlined.Receipt, null) })
                 AssistChip(onClick = { nav("finance/import") }, label = { Text("Выписка") }, leadingIcon = { Icon(Icons.Outlined.UploadFile, null) })
@@ -271,10 +274,12 @@ fun TxRow(t: Transaction, cats: Map<String, BudgetCategory>, onClick: () -> Unit
 fun TransactionsScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
-    val txs by c.store.observe(E.TRANSACTIONS, Transaction.serializer()).collectAsState(initial = emptyList())
     val cats = categoriesMap()
     var month by remember { mutableStateOf(LocalDate.now().withDayOfMonth(1)) }
     var query by remember { mutableStateOf("") }
+    // Room narrows to the month (a day of slack for time zones); the exact local-date filter below stays.
+    val txs by remember(month) { c.store.observeSince(E.TRANSACTIONS, sinceIso(month), Transaction.serializer()) }
+        .collectAsState(initial = emptyList())
     val filtered = txs.filter { t ->
         val d = t.at?.local()?.toLocalDate()
         d != null && !d.isBefore(month) && d.isBefore(month.plusMonths(1)) && t.status != "excluded" &&
@@ -323,13 +328,8 @@ fun ImportStatementScreen() {
             busy = true; error = null
             try {
                 val cr = context.contentResolver
-                val name = cr.query(uri, null, null, null, null)?.use { cur ->
-                    val idx = cur.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    if (cur.moveToFirst() && idx >= 0) cur.getString(idx) else null
-                } ?: "statement"
-                val bytes = cr.openInputStream(uri)!!.use { it.readBytes() }
-                report = c.api.upload("/api/v1/finance/statements", name, cr.getType(uri) ?: "application/octet-stream",
-                    bytes.toRequestBody((cr.getType(uri) ?: "application/octet-stream").toMediaTypeOrNull())).jsonObject
+                report = UriUploader.upload(c.api, cr, "/api/v1/finance/statements", uri,
+                    name = UriUploader.displayName(cr, uri, fallback = "statement")).jsonObject
                 c.sync.requestSync(0)
             } catch (e: Exception) { error = e.message }
             busy = false
@@ -369,3 +369,9 @@ fun ImportStatementScreen() {
 
 @Suppress("unused")
 private fun instantLabel(s: String?) = parseInstant(s)?.let { relative(it) } ?: ""
+
+/**
+ * Lower bound for RecordDao.observeSince on a local date: the day before, at UTC midnight, so that whatever
+ * offset the server wrote the timestamp with, nothing from [day] onward is cut off. Compared as text.
+ */
+fun sinceIso(day: LocalDate): String = day.minusDays(1).atStartOfDay(ZoneOffset.UTC).toOffsetDateTime().toString()

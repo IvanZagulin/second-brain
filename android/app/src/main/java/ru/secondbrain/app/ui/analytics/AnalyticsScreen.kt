@@ -30,6 +30,7 @@ import ru.secondbrain.app.ui.components.LocalContainer
 import ru.secondbrain.app.ui.components.Screen
 import ru.secondbrain.app.ui.components.Secondary
 import ru.secondbrain.app.ui.components.rememberLoad
+import ru.secondbrain.app.ui.finance.sinceIso
 import ru.secondbrain.app.ui.theme.Tone
 import java.time.LocalDate
 
@@ -37,14 +38,16 @@ import java.time.LocalDate
 fun AnalyticsScreen() {
     val c = LocalContainer.current
     var days by remember { mutableStateOf(30) }
-    val txs by c.store.observe(E.TRANSACTIONS, Transaction.serializer()).collectAsState(initial = emptyList())
-    val cats by c.store.observe(E.CATEGORIES, BudgetCategory.serializer()).collectAsState(initial = emptyList())
-    val mood by c.store.observe(E.MOOD, MoodEntry.serializer()).collectAsState(initial = emptyList())
-    val metrics by c.store.observe(E.METRICS, BodyMetric.serializer()).collectAsState(initial = emptyList())
-    val workouts by c.store.observe(E.WORKOUTS, Workout.serializer()).collectAsState(initial = emptyList())
+    val since = LocalDate.now().minusDays(days.toLong())
+    // Room narrows to the chosen period (a day of slack for time zones); the exact local-date filter below stays.
+    val txs by remember(days) { c.store.observeSince(E.TRANSACTIONS, sinceIso(since), Transaction.serializer()) }
+        .collectAsState(initial = emptyList())
+    val cats by remember { c.store.observe(E.CATEGORIES, BudgetCategory.serializer()) }.collectAsState(initial = emptyList())
+    val mood by remember { c.store.observe(E.MOOD, MoodEntry.serializer()) }.collectAsState(initial = emptyList())
+    val metrics by remember { c.store.observe(E.METRICS, BodyMetric.serializer()) }.collectAsState(initial = emptyList())
+    val workouts by remember { c.store.observe(E.WORKOUTS, Workout.serializer()) }.collectAsState(initial = emptyList())
     val health = rememberLoad(days) { c.api.get("/api/v1/health/summary", mapOf("days" to days)).jsonObject }
     val usage = rememberLoad { c.api.get("/api/v1/usage/summary").jsonObject }
-    val since = LocalDate.now().minusDays(days.toLong())
     val catMap = cats.associateBy { it.id }
     val expenses = txs.filter { it.direction == "out" && it.flowType == "expense" && it.status != "excluded" && it.scope == "personal" &&
         (it.at?.local()?.toLocalDate()?.isAfter(since) == true) }

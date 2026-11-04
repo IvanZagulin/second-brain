@@ -91,6 +91,17 @@ interface RecordDao {
     @Query("SELECT * FROM records WHERE entity = :entity AND id = :id")
     fun observeOne(entity: String, id: String): Flow<RecordEntity?>
 
+    /** Records whose sort key (occurred_at for transactions) is on or after [sinceIso]; a screen showing a period. */
+    @Query("SELECT * FROM records WHERE entity = :entity AND deleted = 0 AND sortAt >= :sinceIso ORDER BY sortAt DESC")
+    fun observeSince(entity: String, sinceIso: String): Flow<List<RecordEntity>>
+
+    @Query("SELECT * FROM records WHERE entity = :entity AND deleted = 0 ORDER BY sortAt DESC LIMIT :limit")
+    fun observeLatest(entity: String, limit: Int): Flow<List<RecordEntity>>
+
+    /** Which parents have at least one live child (e.g. conversations that contain a message), without the rows. */
+    @Query("SELECT DISTINCT parentId FROM records WHERE entity = :entity AND deleted = 0 AND parentId IS NOT NULL")
+    fun observeParentIds(entity: String): Flow<List<String>>
+
     @Query("SELECT * FROM records WHERE entity = :entity AND deleted = 0")
     suspend fun all(entity: String): List<RecordEntity>
 

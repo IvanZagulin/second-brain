@@ -55,25 +55,24 @@ fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.conten
 class RecordStore(private val db: AppDatabase, private val onLocalChange: () -> Unit) {
     private val records = db.records()
 
-    // Flows are cached per query so composables calling observe() on every recomposition keep
-    // collecting the same instance instead of restarting the Room query each time.
-    private val flows = java.util.concurrent.ConcurrentHashMap<String, Flow<*>>()
-
-    @Suppress("UNCHECKED_CAST")
-    private fun <F> cached(key: String, create: () -> Flow<F>): Flow<F> = flows.getOrPut(key) { create() } as Flow<F>
-
-    fun <T> observe(entity: String, serializer: KSerializer<T>): Flow<List<T>> = cached("all/$entity") {
+    // Every call builds a new cold flow: composables must `remember` the instance they collect, otherwise the
+    // Room query restarts on each recomposition (collectAsState keys on the flow object).
+    fun <T> observe(entity: String, serializer: KSerializer<T>): Flow<List<T>> =
         records.observe(entity).map { list -> list.mapNotNull { decode(it, serializer) } }
-    }
+
+    fun <T> observeSince(entity: String, sinceIso: String, serializer: KSerializer<T>): Flow<List<T>> =
+        records.observeSince(entity, sinceIso).map { list -> list.mapNotNull { decode(it, serializer) } }
+
+    fun <T> observeLatest(entity: String, limit: Int, serializer: KSerializer<T>): Flow<List<T>> =
+        records.observeLatest(entity, limit).map { list -> list.mapNotNull { decode(it, serializer) } }
+
+    fun observeParentIds(entity: String): Flow<List<String>> = records.observeParentIds(entity)
 
     fun <T> observeChildren(entity: String, parentId: String, serializer: KSerializer<T>): Flow<List<T>> =
-        cached("children/$entity/$parentId") {
-            records.observeChildren(entity, parentId).map { list -> list.mapNotNull { decode(it, serializer) } }
-        }
+        records.observeChildren(entity, parentId).map { list -> list.mapNotNull { decode(it, serializer) } }
 
-    fun <T> observeOne(entity: String, id: String, serializer: KSerializer<T>): Flow<T?> = cached("one/$entity/$id") {
+    fun <T> observeOne(entity: String, id: String, serializer: KSerializer<T>): Flow<T?> =
         records.observeOne(entity, id).map { r -> r?.takeIf { !it.deleted }?.let { decode(it, serializer) } }
-    }
 
     suspend fun <T> all(entity: String, serializer: KSerializer<T>): List<T> =
         records.all(entity).mapNotNull { decode(it, serializer) }

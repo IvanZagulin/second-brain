@@ -84,15 +84,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 import ru.secondbrain.app.core.parseInstant
 import ru.secondbrain.app.core.relative
-import ru.secondbrain.app.data.api.ApiException
-import ru.secondbrain.app.data.api.ChatEvent
+import ru.secondbrain.app.data.api.UriUploader
 import ru.secondbrain.app.data.model.CHAT_MODES
 import ru.secondbrain.app.data.model.Conversation
 import ru.secondbrain.app.data.model.E
@@ -114,26 +113,25 @@ import ru.secondbrain.app.ui.components.Spark
 import ru.secondbrain.app.ui.components.rememberAction
 import ru.secondbrain.app.ui.theme.AgentProse
 import ru.secondbrain.app.ui.theme.Tone
-import java.util.UUID
 
 @Composable
 fun ConversationsScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
-    val scope = rememberCoroutineScope()
-    val convs by c.store.observe(E.CONVERSATIONS, Conversation.serializer()).collectAsState(initial = emptyList())
-    val messages by c.store.observe(E.MESSAGES, Message.serializer()).collectAsState(initial = null)
+    val act = rememberAction()
+    val convs by remember { c.store.observe(E.CONVERSATIONS, Conversation.serializer()) }.collectAsState(initial = emptyList())
+    val parentIds by remember { c.store.observeParentIds(E.MESSAGES) }.collectAsState(initial = null)
     var showArchived by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf<Conversation?>(null) }
     // A conversation opened and left without a word: hidden, and removable in one tap.
-    val withMessages = remember(messages) { messages?.mapTo(HashSet()) { it.conversationId } }
+    val withMessages = remember(parentIds) { parentIds?.toHashSet() }
     val empty = if (withMessages == null) emptyList() else convs.filter { it.kind == "chat" && it.id !in withMessages }
     val list = convs.filter { it.archived == showArchived && it !in empty }
         .sortedWith(compareByDescending<Conversation> { it.pinned || it.kind == "agent" }.thenByDescending { it.lastMessageAt ?: "" })
     Screen("Диалоги", onRefresh = { c.sync.syncNow() },
         actions = { TextButton(onClick = { showArchived = !showArchived }) { Text(if (showArchived) "Активные" else "Архив") } },
         fab = {
-            ExtendedFloatingActionButton(onClick = { scope.launch { nav("chat/${c.chat.newConversation()}") } },
+            ExtendedFloatingActionButton(onClick = { act(null) { nav("chat/${c.chat.newConversation()}") } },
                 icon = { Icon(Icons.Default.Add, null) }, text = { Text("Новый диалог") })
         }) {
         if (list.isEmpty()) item { EmptyState("Диалогов пока нет. Начните новый — агент помнит всё между диалогами.") }
@@ -158,7 +156,7 @@ fun ConversationsScreen() {
         if (empty.isNotEmpty() && !showArchived) item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Secondary("Пустых диалогов: ${empty.size}", Modifier.weight(1f))
-                TextButton(onClick = { scope.launch { empty.forEach { c.store.delete(E.CONVERSATIONS, it.id) } } }) { Text("Убрать") }
+                TextButton(onClick = { act(null) { empty.forEach { c.store.delete(E.CONVERSATIONS, it.id) } } }) { Text("Убрать") }
             }
         }
     }
@@ -167,7 +165,7 @@ fun ConversationsScreen() {
             title = { Text("Удалить диалог?") },
             text = { Text("«${conv.title}» пропадёт из списка. То, что агент уже запомнил из него, останется в памяти.") },
             confirmButton = {
-                TextButton(onClick = { scope.launch { c.store.delete(E.CONVERSATIONS, conv.id) }; confirmDelete = null }) { Text("Удалить") }
+                TextButton(onClick = { act(null) { c.store.delete(E.CONVERSATIONS, conv.id) }; confirmDelete = null }) { Text("Удалить") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Отмена") } })
     }
@@ -176,7 +174,7 @@ fun ConversationsScreen() {
 @Composable
 private fun ConversationMenu(conv: Conversation, onDelete: () -> Unit) {
     val c = LocalContainer.current
-    val scope = rememberCoroutineScope()
+    val act = rememberAction()
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }, modifier = Modifier.size(32.dp)) {
@@ -185,7 +183,7 @@ private fun ConversationMenu(conv: Conversation, onDelete: () -> Unit) {
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             fun set(field: String, value: Boolean) {
                 open = false
-                scope.launch { c.store.save(E.CONVERSATIONS, jsonOf(field to value), conv.id) }
+                act(null) { c.store.save(E.CONVERSATIONS, jsonOf(field to value), conv.id) }
             }
             DropdownMenuItem(text = { Text(if (conv.pinned) "Открепить" else "Закрепить") }, onClick = { set("pinned", !conv.pinned) })
             DropdownMenuItem(text = { Text(if (conv.archived) "Вернуть из архива" else "В архив") }, onClick = { set("archived", !conv.archived) })
@@ -193,9 +191,6 @@ private fun ConversationMenu(conv: Conversation, onDelete: () -> Unit) {
         }
     }
 }
-
-private data class LiveTurn(val userText: String, val answer: String = "", val tools: List<Pair<String, String>> = emptyList(),
-                            val error: String? = null, val done: Boolean = false)
 
 /** ``initial``: a question asked from the home screen, sent as soon as the conversation opens. */
 @Composable
@@ -205,25 +200,30 @@ fun ChatScreen(conversationId: String, initial: String? = null) {
     val context = LocalContext.current
     val snackbar = LocalSnackbar.current
     val scope = rememberCoroutineScope()
-    val conv by c.store.observeOne(E.CONVERSATIONS, conversationId, Conversation.serializer()).collectAsState(initial = null)
-    val messages by c.store.observeChildren(E.MESSAGES, conversationId, Message.serializer()).collectAsState(initial = emptyList())
-    val pending by c.chat.pending(conversationId).collectAsState(initial = emptyList())
+    val act = rememberAction()
+    val vm = viewModel(key = conversationId) { ChatViewModel(c, conversationId) }
+    val conv by remember(conversationId) { c.store.observeOne(E.CONVERSATIONS, conversationId, Conversation.serializer()) }.collectAsState(initial = null)
+    val messages by remember(conversationId) { c.store.observeChildren(E.MESSAGES, conversationId, Message.serializer()) }.collectAsState(initial = emptyList())
+    val pending by remember(conversationId) { c.chat.pending(conversationId) }.collectAsState(initial = emptyList())
     var input by remember { mutableStateOf("") }
-    var live by remember { mutableStateOf<LiveTurn?>(null) }
+    val live by vm.live.collectAsStateWithLifecycle()
     val attachments = remember { mutableStateListOf<Pair<String, String>>() }  // id to name
     var uploading by remember { mutableStateOf(false) }
     var modeMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     // Tool results and tool-only assistant turns are plumbing: their effect shows as chips on the answer.
-    val visible = messages.filter {
-        when (it.role) {
-            "user", "trigger" -> true
-            "assistant" -> it.text.isNotBlank()
-            else -> false
-        }
-    }.sortedBy { it.createdAt ?: "" }
+    val visible = remember(messages) {
+        messages.filter {
+            when (it.role) {
+                "user", "trigger" -> true
+                "assistant" -> it.text.isNotBlank()
+                else -> false
+            }
+        }.sortedBy { it.createdAt ?: "" }
+    }
 
-    LaunchedEffect(visible.size, live?.answer?.length, pending.size) {
+    // Follow the answer, but not on every delta: once per ~200 streamed characters, on Done, and when rows change.
+    LaunchedEffect(visible.size, pending.size, live != null, (live?.answer?.length ?: 0) / 200, live?.done) {
         val count = visible.size + pending.size + (if (live != null) 2 else 0)
         if (count > 0) listState.animateScrollToItem(count - 1)
     }
@@ -240,10 +240,8 @@ fun ChatScreen(conversationId: String, initial: String? = null) {
             uploading = true
             try {
                 val cr = context.contentResolver
-                val mime = cr.getType(uri) ?: "application/octet-stream"
-                val bytes = cr.openInputStream(uri)!!.use { it.readBytes() }
-                val name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
-                val res = c.api.upload("/api/v1/chat/attachments", name, mime, bytes.toRequestBody(mime.toMediaTypeOrNull())).jsonObject
+                val name = UriUploader.displayName(cr, uri)
+                val res = UriUploader.upload(c.api, cr, "/api/v1/chat/attachments", uri, name = name).jsonObject
                 attachments += res["id"]!!.jsonPrimitive.content to name
             } catch (e: Exception) {
                 snackbar.showSnackbar(e.message ?: "Не удалось загрузить файл")
@@ -258,34 +256,7 @@ fun ChatScreen(conversationId: String, initial: String? = null) {
         val ids = attachments.map { it.first }
         input = ""
         attachments.clear()
-        live = LiveTurn(text)
-        val clientId = UUID.randomUUID().toString()
-        scope.launch {
-            // Set by the Start event: from then on the server owns the turn and the answer arrives through sync.
-            var started = false
-            c.chat.send(conversationId, text, ids, null, clientId).collect { ev ->
-                live = when (ev) {
-                    is ChatEvent.Delta -> live?.copy(answer = (live?.answer ?: "") + ev.text)
-                    is ChatEvent.Tool -> live?.let { l ->
-                        val others = l.tools.filter { it.first != ev.name }
-                        l.copy(tools = others + (ev.name to (if (ev.status == "running") "…" else "✓") + " " + (ev.title ?: toolLabel(ev.name))))
-                    }
-                    is ChatEvent.Done -> live?.copy(done = true)
-                    is ChatEvent.Error -> {
-                        if (ev.code == "offline") {
-                            // Never reached the server: queue it under the SAME client id so a late delivery of the
-                            // original request cannot produce a second message. Dropped mid-stream: the server keeps
-                            // running the turn; the sync below pulls the stored messages for this conversation.
-                            if (!started) c.chat.queueMessage(conversationId, text, ids, clientMessageId = clientId)
-                            null
-                        } else live?.copy(error = ev.message, done = true)
-                    }
-                    is ChatEvent.Start -> { started = true; live }
-                }
-            }
-            runCatching { c.sync.syncNow() }
-            if (live?.error == null) live = null
-        }
+        vm.send(text, ids)
     }
 
     var initialSent by rememberSaveable { mutableStateOf(false) }
@@ -319,7 +290,7 @@ fun ChatScreen(conversationId: String, initial: String? = null) {
                             CHAT_MODES.forEach { (k, v) ->
                                 DropdownMenuItem(text = { Text(v) }, onClick = {
                                     modeMenu = false
-                                    scope.launch { c.store.save(E.CONVERSATIONS, jsonOf("mode" to k), conversationId) }
+                                    act(null) { c.store.save(E.CONVERSATIONS, jsonOf("mode" to k), conversationId) }
                                 })
                             }
                         }
@@ -343,7 +314,7 @@ fun ChatScreen(conversationId: String, initial: String? = null) {
                 items(visible, key = { it.id }) { m -> Bubble(m) }
                 items(pending, key = { it.clientMessageId }) { p ->
                     UserBubble(p.text, footer = if (p.status == "failed") "Не отправлено: ${p.error ?: ""}" else "Отправится, когда будет связь") {
-                        if (p.status == "failed") TextButton(onClick = { scope.launch { c.chat.retry(p.clientMessageId) } }) { Text("Повторить") }
+                        if (p.status == "failed") TextButton(onClick = { act(null) { c.chat.retry(p.clientMessageId) } }) { Text("Повторить") }
                     }
                 }
                 live?.let { l ->
@@ -399,15 +370,6 @@ fun ChatScreen(conversationId: String, initial: String? = null) {
         }
     }
 }
-
-private val TOOL_LABELS = mapOf(
-    "search_memory" to "Вспоминаю", "search_archive" to "Ищу в переписках", "finance_summary" to "Смотрю финансы",
-    "list_transactions" to "Смотрю операции", "spending_breakdown" to "Считаю траты", "list_obligations" to "Смотрю платежи",
-    "workout_overview" to "Смотрю тренировки", "exercise_progress" to "Смотрю прогресс", "list_tasks" to "Смотрю задачи",
-    "save_memory" to "Запоминаю", "create_task" to "Создаю задачу", "schedule_followup" to "Планирую проверку",
-)
-
-private fun toolLabel(name: String) = TOOL_LABELS[name] ?: name
 
 @Composable
 private fun Bubble(m: Message) {

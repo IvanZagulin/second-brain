@@ -4,11 +4,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.OpenableColumns
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,22 +25,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 import ru.secondbrain.app.AppContainer
 import ru.secondbrain.app.MainActivity
 import ru.secondbrain.app.SecondBrainApp
+import ru.secondbrain.app.core.BiometricGate
 import ru.secondbrain.app.core.Prefs
 import ru.secondbrain.app.core.rub
+import ru.secondbrain.app.data.api.UriUploader
 import ru.secondbrain.app.data.model.E
 import ru.secondbrain.app.data.repo.jsonOf
 import ru.secondbrain.app.data.repo.str
@@ -52,7 +46,6 @@ import ru.secondbrain.app.ui.components.AppCard
 import ru.secondbrain.app.ui.components.Secondary
 import ru.secondbrain.app.ui.theme.SecondBrainTheme
 import ru.secondbrain.app.ui.theme.Tone
-import kotlin.coroutines.resume
 
 /** Receives links, text, images, PDFs, statements and archives from the system share sheet. */
 class ShareActivity : FragmentActivity() {
@@ -71,15 +64,8 @@ class ShareActivity : FragmentActivity() {
 
     private suspend fun unlock(c: AppContainer): Boolean {
         if (c.prefs.get(Prefs.Keys.biometricEnabled) == false) return true
-        val auth = if (Build.VERSION.SDK_INT >= 30) BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        else BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        if (BiometricManager.from(this).canAuthenticate(auth) != BiometricManager.BIOMETRIC_SUCCESS) return true
-        return suspendCancellableCoroutine { cont ->
-            BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { if (cont.isActive) cont.resume(true) }
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { if (cont.isActive) cont.resume(false) }
-            }).authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Второй мозг").setAllowedAuthenticators(auth).build())
-        }
+        if (!BiometricGate.available(this)) return true
+        return BiometricGate.authenticate(this)
     }
 
     private fun open(route: String) {
@@ -88,18 +74,13 @@ class ShareActivity : FragmentActivity() {
         finish()
     }
 
-    private fun fileName(uri: Uri): String = contentResolver.query(uri, null, null, null, null)?.use { cur ->
-        val idx = cur.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-        if (cur.moveToFirst() && idx >= 0) cur.getString(idx) else null
-    } ?: "file"
-
     @Composable
     private fun ShareSheet(c: AppContainer, text: String?, subject: String?, uri: Uri?, mime: String) {
         val scope = rememberCoroutineScope()
         var busy by remember { mutableStateOf(false) }
         var result by remember { mutableStateOf<String?>(null) }
         val url = text?.let { Regex("https?://\\S+").find(it)?.value }
-        val name = uri?.let { fileName(it) } ?: ""
+        val name = remember(uri) { uri?.let { UriUploader.displayName(contentResolver, it) } ?: "" }
         val lower = name.lowercase()
 
         fun run(block: suspend () -> Unit) = scope.launch {
@@ -109,10 +90,11 @@ class ShareActivity : FragmentActivity() {
             try { block() } catch (e: CancellationException) { throw e } catch (e: Exception) { result = e.message ?: "Ошибка" } finally { busy = false }
         }
 
-        suspend fun uploadAttachment(): String {
-            val bytes = contentResolver.openInputStream(uri!!)!!.use { it.readBytes() }
-            return c.api.upload("/api/v1/chat/attachments", name, mime, bytes.toRequestBody(mime.toMediaTypeOrNull())).jsonObject.str("id")!!
-        }
+        // Streams from the content provider; the share sheet's own type/name are what the sender declared.
+        suspend fun upload(path: String, fields: Map<String, String> = emptyMap()) =
+            UriUploader.upload(c.api, contentResolver, path, uri!!, fields, name = name, mime = mime).jsonObject
+
+        suspend fun uploadAttachment(): String = upload("/api/v1/chat/attachments").str("id")!!
 
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Что сделать?", style = MaterialTheme.typography.headlineLarge)
@@ -146,14 +128,12 @@ class ShareActivity : FragmentActivity() {
                     result = "Чек: ${r.str("store") ?: ""} ${rub(r["total_minor"]?.jsonPrimitive?.longOrNull, kopecks = true)}"
                 } }) { Text("Это чек") }
                 if (isPdf || isTable) Button(onClick = { run {
-                    val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-                    val r = c.api.upload("/api/v1/finance/statements", name, mime, bytes.toRequestBody(mime.toMediaTypeOrNull())).jsonObject
+                    val r = upload("/api/v1/finance/statements")
                     c.sync.requestSync(0)
                     result = "Выписка: новых ${r.str("created")}, совпало ${r.str("linked")}, уже было ${r.str("duplicate")}"
                 } }) { Text("Импорт выписки") }
                 if (isArchive) Button(onClick = { run {
-                    val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-                    val job = c.api.upload("/api/v1/imports", name, mime, bytes.toRequestBody(mime.toMediaTypeOrNull()), mapOf("kind" to "auto")).jsonObject
+                    val job = upload("/api/v1/imports", mapOf("kind" to "auto"))
                     open("memory/import/${job.str("id")}")
                 } }) { Text("Импорт архива переписки") }
                 OutlinedButton(onClick = { run {

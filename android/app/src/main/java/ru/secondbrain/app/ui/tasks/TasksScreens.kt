@@ -75,7 +75,7 @@ import ru.secondbrain.app.ui.theme.Tone
 fun TasksScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val tasks by c.store.observe(E.TASKS, Task.serializer()).collectAsState(initial = emptyList())
+    val tasks by remember { c.store.observe(E.TASKS, Task.serializer()) }.collectAsState(initial = emptyList())
     var filter by remember { mutableStateOf("open") }
     var editing by remember { mutableStateOf<Task?>(null) }
     val top = tasks.filter { it.parentId == null }
@@ -184,8 +184,8 @@ private fun TaskSheet(t: Task, subtasks: List<Task>, onClose: () -> Unit) {
 fun HabitsScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val habits by c.store.observe(E.HABITS, Habit.serializer()).collectAsState(initial = emptyList())
-    val logs by c.store.observe(E.HABIT_LOGS, HabitLog.serializer()).collectAsState(initial = emptyList())
+    val habits by remember { c.store.observe(E.HABITS, Habit.serializer()) }.collectAsState(initial = emptyList())
+    val logs by remember { c.store.observe(E.HABIT_LOGS, HabitLog.serializer()) }.collectAsState(initial = emptyList())
     var adding by remember { mutableStateOf(false) }
     val today = LocalDate.now()
     Screen("Привычки", fab = { ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Привычка") }) }) {
@@ -227,7 +227,7 @@ fun HabitsScreen() {
 fun ExperimentsScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val experiments by c.store.observe(E.EXPERIMENTS, Experiment.serializer()).collectAsState(initial = emptyList())
+    val experiments by remember { c.store.observe(E.EXPERIMENTS, Experiment.serializer()) }.collectAsState(initial = emptyList())
     var adding by remember { mutableStateOf(false) }
     Screen("Эксперименты", fab = { ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Эксперимент") }) }) {
         item { Secondary("Гипотеза → срок → данные → вывод. Например: «без донатов месяц — минус 5 000 ₽ и лучше сон».") }
@@ -300,7 +300,7 @@ fun MoodSheet(onClose: () -> Unit) {
 @Composable
 fun MoodScreen() {
     val c = LocalContainer.current
-    val entries by c.store.observe(E.MOOD, MoodEntry.serializer()).collectAsState(initial = emptyList())
+    val entries by remember { c.store.observe(E.MOOD, MoodEntry.serializer()) }.collectAsState(initial = emptyList())
     var open by remember { mutableStateOf(false) }
     val sorted = entries.sortedBy { it.occurredAt ?: "" }
     Screen("Настроение", fab = { ExtendedFloatingActionButton(onClick = { open = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Записать") }) }) {
@@ -326,7 +326,7 @@ fun MoodScreen() {
 fun NotesScreen() {
     val c = LocalContainer.current
     val act = rememberAction()
-    val notes by c.store.observe(E.NOTES, Note.serializer()).collectAsState(initial = emptyList())
+    val notes by remember { c.store.observe(E.NOTES, Note.serializer()) }.collectAsState(initial = emptyList())
     var text by remember { mutableStateOf("") }
     var open by remember { mutableStateOf<String?>(null) }
     var confirm by remember { mutableStateOf<Note?>(null) }

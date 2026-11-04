@@ -54,7 +54,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,7 +63,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import java.time.LocalDate
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -116,15 +114,15 @@ val HelpDismissedKey = booleanPreferencesKey("help_dismissed")
 fun HomeScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
-    val scope = rememberCoroutineScope()
+    val act = rememberAction()
     val cached by c.prefs.homeCacheFlow().collectAsState(initial = null)
     val home = cached?.let { runCatching { PlainJson.parseToJsonElement(it).jsonObject }.getOrNull() }
     val update by c.updates.available.collectAsState()
-    val convs by c.store.observe(E.CONVERSATIONS, Conversation.serializer()).collectAsState(initial = emptyList())
-    val notes by c.store.observe(E.NOTES, Note.serializer()).collectAsState(initial = emptyList())
+    val convs by remember { c.store.observe(E.CONVERSATIONS, Conversation.serializer()) }.collectAsState(initial = emptyList())
+    val notes by remember { c.store.observe(E.NOTES, Note.serializer()) }.collectAsState(initial = emptyList())
     LaunchedEffect(Unit) { c.sync.refreshHome() }
 
-    fun ask(text: String) = scope.launch {
+    fun ask(text: String) = act(null) {
         val id = c.chat.newConversation()
         nav("chat/$id?q=${Uri.encode(text)}")
     }
@@ -279,14 +277,14 @@ private data class MenuItem(val label: String, val icon: ImageVector, val route:
 fun MoreScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
-    val tasks by c.store.observe(E.TASKS, Task.serializer()).collectAsState(initial = emptyList())
-    val habits by c.store.observe(E.HABITS, Habit.serializer()).collectAsState(initial = emptyList())
-    val notes by c.store.observe(E.NOTES, Note.serializer()).collectAsState(initial = emptyList())
-    val exps by c.store.observe(E.EXPERIMENTS, Experiment.serializer()).collectAsState(initial = emptyList())
-    val moods by c.store.observe(E.MOOD, MoodEntry.serializer()).collectAsState(initial = emptyList())
-    val memories by c.store.observe(E.MEMORIES, Memory.serializer()).collectAsState(initial = emptyList())
-    val people by c.store.observe(E.PEOPLE, Person.serializer()).collectAsState(initial = emptyList())
-    val convs by c.store.observe(E.CONVERSATIONS, Conversation.serializer()).collectAsState(initial = emptyList())
+    val tasks by remember { c.store.observe(E.TASKS, Task.serializer()) }.collectAsState(initial = emptyList())
+    val habits by remember { c.store.observe(E.HABITS, Habit.serializer()) }.collectAsState(initial = emptyList())
+    val notes by remember { c.store.observe(E.NOTES, Note.serializer()) }.collectAsState(initial = emptyList())
+    val exps by remember { c.store.observe(E.EXPERIMENTS, Experiment.serializer()) }.collectAsState(initial = emptyList())
+    val moods by remember { c.store.observe(E.MOOD, MoodEntry.serializer()) }.collectAsState(initial = emptyList())
+    val memories by remember { c.store.observe(E.MEMORIES, Memory.serializer()) }.collectAsState(initial = emptyList())
+    val people by remember { c.store.observe(E.PEOPLE, Person.serializer()) }.collectAsState(initial = emptyList())
+    val convs by remember { c.store.observe(E.CONVERSATIONS, Conversation.serializer()) }.collectAsState(initial = emptyList())
     var showEmpty by remember { mutableStateOf(false) }
 
     val you = listOfNotNull(
@@ -347,13 +345,13 @@ private fun MenuGroup(items: List<MenuItem>, nav: (String) -> Unit) {
 fun PortraitScreen() {
     val c = LocalContainer.current
     val nav = LocalNavigate.current
-    val notes by c.store.observe(E.NOTES, Note.serializer()).collectAsState(initial = emptyList())
-    val memories by c.store.observe(E.MEMORIES, Memory.serializer()).collectAsState(initial = emptyList())
-    val people by c.store.observe(E.PEOPLE, Person.serializer()).collectAsState(initial = emptyList())
+    val notes by remember { c.store.observe(E.NOTES, Note.serializer()) }.collectAsState(initial = emptyList())
+    val memories by remember { c.store.observe(E.MEMORIES, Memory.serializer()) }.collectAsState(initial = emptyList())
+    val people by remember { c.store.observe(E.PEOPLE, Person.serializer()) }.collectAsState(initial = emptyList())
     val portraits = notes.filter { "портрет" in it.tags }.sortedByDescending { it.createdAt ?: "" }
     var chosen by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    val act = rememberAction()
     val portrait = portraits.firstOrNull { it.id == chosen } ?: portraits.firstOrNull()
     Screen("Что я о тебе знаю") {
         item {
@@ -389,7 +387,7 @@ fun PortraitScreen() {
         title = { Text("Удалить портрет?") },
         text = { Text("Текст портрета удалится. Воспоминания и карточки людей останутся — их можно поправить в «Памяти» и «Людях».") },
         confirmButton = {
-            TextButton(onClick = { confirmDelete = false; chosen = null; scope.launch { c.store.delete(E.NOTES, portrait.id) } }) { Text("Удалить") }
+            TextButton(onClick = { confirmDelete = false; chosen = null; act(null) { c.store.delete(E.NOTES, portrait.id) } }) { Text("Удалить") }
         },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } })
 }
