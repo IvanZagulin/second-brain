@@ -94,7 +94,7 @@ async def account_balances(db: AsyncSession, owner_id: uuid.UUID) -> list[dict[s
         if acc.balance_at is not None:
             q = q.where(Transaction.occurred_at > acc.balance_at)
         delta = int((await db.execute(q)).scalar_one() or 0)
-        confirmed = acc.balance_at is not None and acc.balance_source in ("statement", "notification", "manual") \
+        confirmed = acc.balance_at is not None and acc.balance_source in ("statement", "notification", "manual", "screenshot") \
             and now - acc.balance_at <= CONFIRMED_FRESH
         out.append({"account": acc, "balance_minor": acc.balance_minor + delta, "confirmed": confirmed})
     return out

@@ -563,42 +563,100 @@ async def _resolve_category(ctx: ToolCtx, name: str) -> BudgetCategory:
         BudgetCategory.owner_id == ctx.owner_id, BudgetCategory.deleted_at.is_(None),
         or_(BudgetCategory.code == name, BudgetCategory.name.ilike(f"%{name}%"))))).scalars().all()
     if not rows:
-        raise ToolError(f"Категория {name!r} не найдена")
+        # Name every category: a bare "not found" sent the model into blind retries («Еда», «Питание», …).
+        names = (await ctx.db.execute(select(BudgetCategory.name).where(
+            BudgetCategory.owner_id == ctx.owner_id, BudgetCategory.deleted_at.is_(None)).order_by(BudgetCategory.name)
+        )).scalars().all()
+        raise ToolError(f"Категория {name!r} не найдена. Есть: " + ", ".join(names))
     return rows[0]
 
 
 class AddTxIn(BaseModel):
     amount_rub: float = Field(gt=0)
-    direction: Literal["out", "in"] = "out"
+    direction: Literal["out", "in"] = Field("out", description="out — деньги ушли со счёта, in — пришли")
+    flow_type: Literal["expense", "income", "cash_withdrawal", "cash_deposit", "transfer", "debt_payment", "refund"] = Field(
+        "expense", description="expense — трата; income — доход (зарплата, в т. ч. наличными на счёт «Наличные»); "
+                               "cash_withdrawal — снял наличные с карты (direction=out, счёт — карта; на «Наличные» "
+                               "зеркало ставится само); cash_deposit — положил наличные на карту (direction=in, счёт — "
+                               "карта); transfer — между своими счетами; debt_payment — платёж по долгу; refund — возврат")
     description: str
     merchant: str | None = None
-    account: str | None = Field(None, description="Название счёта, например «Наличные»")
-    category: str | None = None
-    occurred_at: str | None = None
+    account: str | None = Field(None, description="Название счёта: «Наличные», «Сбербанк», «Т-Банк»… Для трат "
+                                                  "наличными — «Наличные». Пусто — основная карта")
+    category: str | None = Field(None, description="Название категории из списка владельца (см. ошибку, если нет)")
+    occurred_at: str | None = Field(None, description="ISO 8601; пусто — сейчас")
     scope: Literal["personal", "business"] = "personal"
 
 
-@tool("add_transaction", "Записать операцию вручную (например, трату наличными, о которой сказал владелец).",
+async def _find_account(ctx: ToolCtx, name: str | None, *, prefer_cash: bool = False):
+    from app.models import Account
+    rows = (await ctx.db.execute(select(Account).where(
+        Account.owner_id == ctx.owner_id, Account.deleted_at.is_(None), Account.archived.is_(False)).order_by(Account.sort)
+    )).scalars().all()
+    if name:
+        key = name.strip().lower()
+        for acc in rows:
+            if key in acc.name.lower() or (key in ("наличные", "нал", "кэш", "cash") and acc.kind == "cash"):
+                return acc
+        raise ToolError(f"Счёт {name!r} не найден. Счета: " + ", ".join(f"«{r.name}»" for r in rows))
+    if prefer_cash:
+        return next((r for r in rows if r.kind == "cash"), None)
+    return next((r for r in rows if r.kind in ("card", "current") and not r.is_business), None)
+
+
+@tool("add_transaction", "Записать операцию, о которой владелец сказал словами или показал на скриншоте банка: трату "
+      "(картой или наличными), доход, снятие или внесение наличных, перевод, платёж по долгу. Скриншот с несколькими "
+      "операциями — по одному вызову на операцию с её датой и суммой.",
       AddTxIn, writes=True, domain="finance", title=lambda a: f"Операция {a.amount_rub:g} ₽: {a.description[:50]}")
 async def _add_transaction(ctx: ToolCtx, a: AddTxIn) -> dict:
-    from app.models import Account
-    account_id = None
-    if a.account:
-        acc = (await ctx.db.execute(select(Account).where(
-            Account.owner_id == ctx.owner_id, Account.deleted_at.is_(None), Account.name.ilike(f"%{a.account}%")))
-        ).scalars().first()
-        account_id = acc.id if acc else None
+    direction = a.direction
+    if a.flow_type == "cash_withdrawal":
+        direction = "out"
+    elif a.flow_type in ("cash_deposit", "income", "refund"):
+        direction = "in"
+    acc = await _find_account(ctx, a.account)
+    cat = await _resolve_category(ctx, a.category) if a.category else None
     res = await ingest_evidence(
         ctx.db, ctx.owner_id, kind="manual", fingerprint=uuid.uuid4().hex, amount_minor=to_minor(Decimal(str(a.amount_rub))),
-        direction=a.direction, flow_type="expense" if a.direction == "out" else "income",
+        direction=direction, flow_type=a.flow_type,
         occurred_at=_parse_when(a.occurred_at, ctx.tz_name) or utcnow(), merchant=a.merchant or a.description,
-        description=a.description, account_id=account_id, scope=a.scope, raw_text=None,
+        description=a.description, account_id=acc.id if acc else None, scope=a.scope, raw_text=None,
         parsed={"via": "agent"})
-    if a.category and res.transaction_id:
+    if cat is not None and res.transaction_id:
         tx = await ctx.db.get(Transaction, res.transaction_id)
-        cat = await _resolve_category(ctx, a.category)
         tx.category_id, tx.category_source = cat.id, "user"
-    return {"transaction_id": str(res.transaction_id), "status": res.status}
+    return {"transaction_id": str(res.transaction_id), "status": res.status, "account": acc.name if acc else None,
+            "flow_type": a.flow_type, "direction": direction,
+            # Rolling back a manual operation excludes it from balances and statistics (the row stays in the journal).
+            "_rollback": {"table": "transactions", "id": str(res.transaction_id), "values": {"status": "excluded"}}
+            if res.transaction_id else None}
+
+
+class SetBalanceIn(BaseModel):
+    account: str = Field(description="Название счёта: «Сбербанк», «Наличные», «Т-Банк»…")
+    balance_rub: float = Field(ge=0, description="Фактический остаток на счёте")
+    as_of: str | None = Field(None, description="Момент, на который верен остаток (ISO 8601); пусто — сейчас. "
+                                                "Операции после этого момента прибавляются к остатку автоматически")
+    source: Literal["screenshot", "manual", "statement"] = Field("screenshot", description="Откуда цифра")
+
+
+@tool("set_account_balance", "Установить фактический остаток счёта — со скриншота банка, со слов владельца или из "
+      "выписки. После этого остаток считается подтверждённым, бюджет пересчитывается. Если на скриншоте видны "
+      "ещё не записанные операции, сначала добавь их add_transaction с их датами, потом ставь остаток.",
+      SetBalanceIn, level="B", writes=True, domain="finance",
+      title=lambda a: f"Остаток «{a.account}» → {a.balance_rub:g} ₽")
+async def _set_account_balance(ctx: ToolCtx, a: SetBalanceIn) -> dict:
+    acc = await _find_account(ctx, a.account)
+    before = {"balance_minor": acc.balance_minor, "balance_at": acc.balance_at.isoformat() if acc.balance_at else None,
+              "balance_source": acc.balance_source}
+    acc.balance_minor = to_minor(Decimal(str(a.balance_rub)))
+    acc.balance_at = _parse_when(a.as_of, ctx.tz_name) or utcnow()
+    acc.balance_source = a.source
+    acc.version += 1
+    await ctx.db.flush()
+    return {"ok": True, "account": acc.name, "balance": fmt_rub(acc.balance_minor),
+            "as_of": acc.balance_at.isoformat(), "note": "Операции с датой позже as_of прибавляются к этому остатку.",
+            "_rollback": {"table": "accounts", "id": str(acc.id), "values": before}}
 
 
 class DaysIn(BaseModel):

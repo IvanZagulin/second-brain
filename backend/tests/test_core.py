@@ -402,3 +402,14 @@ def test_patterns_ratio_guard():
 
     assert _ratio(130, 100) == pytest.approx(1.3)
     assert _ratio(0, 0) == 1.0 and _ratio(5, 0) == float("inf")
+
+
+def test_money_tools_and_persona_cover_cash_and_screenshots():
+    from agent.persona import DEFAULT_PERSONA, build_system_prompt
+
+    assert {"add_transaction", "set_account_balance"} <= set(REGISTRY)
+    schema = REGISTRY["add_transaction"].schema.model_json_schema()
+    assert "cash_withdrawal" in str(schema["properties"]["flow_type"])
+    assert REGISTRY["set_account_balance"].level == "B"
+    prompt = build_system_prompt(DEFAULT_PERSONA)
+    assert "set_account_balance" in prompt and "cash_withdrawal" in prompt

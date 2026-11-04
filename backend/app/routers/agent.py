@@ -16,8 +16,8 @@ from app.core.deps import Auth, get_auth
 from app.core.errors import ApiError, NotFound
 from app.core.timeutil import utcnow
 from app.models import (
-    AgentAction, AgentEvent, AgentJob, AgentJobRun, AgentProfile, Exercise, FinancialGoal, Memory, PlanExercise,
-    PlanRevision, Task, Transaction, WorkoutPlan,
+    Account, AgentAction, AgentEvent, AgentJob, AgentJobRun, AgentProfile, Exercise, FinancialGoal, Memory,
+    PlanExercise, PlanRevision, Task, Transaction, WorkoutPlan,
 )
 from app.services.audit import audit
 from app.services.crud import schema_for, serialize
@@ -25,7 +25,8 @@ from app.services.settings import get_setting, set_setting
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
-ROLLBACK_TABLES = {"memories": Memory, "transactions": Transaction, "financial_goals": FinancialGoal, "tasks": Task}
+ROLLBACK_TABLES = {"memories": Memory, "transactions": Transaction, "financial_goals": FinancialGoal, "tasks": Task,
+                   "accounts": Account}
 
 
 class ProfileIn(BaseModel):
