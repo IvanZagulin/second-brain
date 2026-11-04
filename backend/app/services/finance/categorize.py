@@ -43,34 +43,34 @@ DEFAULT_CATEGORIES: list[dict[str, Any]] = [
 ]
 
 MERCHANT_HINTS: list[tuple[str, str]] = [
-    (r"пят[её]рочк|pyaterochk|магнит|magnit|перекр[её]ст|perekrestok|лента|lenta|вкусвилл|vkusvill|ашан|auchan|"
-     r"дикси|dixy|spar|окей|okey|metro c&c|самокат|samokat|яндекс лавка|lavka|азбука вкуса|fix price|светофор|"
+    (r"пят[её]рочк|pyaterochk|магнит|magnit|перекр[её]ст|perekrestok|\bлента\b|\blenta\b|вкусвилл|vkusvill|ашан|auchan|"
+     r"дикси|dixy|\bspar\b|\bокей\b|\bokey\b|metro c&c|самокат|samokat|яндекс лавка|lavka|азбука вкуса|fix price|светофор|"
      r"верный|пятерочк|магнолия|globus|глобус|чижик", "products"),
     (r"kfc|ростикс|вкусно.{0,3}точка|burger|бургер|mcdonald|теремок|шоколадниц|coffee|кофе|starbucks|"
      r"додо|dodo|pizza|пицц|суши|sushi|кафе|cafe|ресторан|restaurant|столов|delivery club|яндекс еда|eda\.yandex|"
      r"cofix|surf coffee|stars coffee", "cafe"),
-    (r"yandex\s?go|яндекс\s?go|taxi|такси|uber|ситимобил|metro|метро|тройк|troika|mosgortrans|мосгортранс|"
+    (r"yandex\s?go|яндекс\s?go|taxi|такси|uber|ситимобил|\bmetro\b|\bметро\b|тройк|troika|mosgortrans|мосгортранс|"
      r"транспорт|ржд|rzd|аэроэкспресс|whoosh|urent|автобус|бензин|азс|лукойл|lukoil|газпромнефть|роснефть",
      "transport"),
-    (r"steam|playstation|psn|xbox|nintendo|epic games|google\s?play|app\s?store|apple\.com|supercell|"
-     r"riot|blizzard|донат|donat|genshin|hoyoverse|mihoyo|roblox|wargaming|lesta|игр", "games"),
+    (r"steam|playstation|\bpsn\b|xbox|nintendo|epic games|google\s?play|app\s?store|apple\.com|supercell|"
+     r"\briot\b|blizzard|донат|donat|genshin|hoyoverse|mihoyo|roblox|wargaming|lesta|игр", "games"),
     (r"anthropic|claude|openai|chatgpt|gemini|google one|midjourney|perplexity|cursor|github|copilot|"
-     r"spotify|яндекс плюс|yandex plus|кинопоиск|okko|ivi|netflix|youtube|telegram premium|vk музыка|boosty",
+     r"spotify|яндекс плюс|yandex plus|кинопоиск|\bokko\b|\bivi\b|netflix|youtube|telegram premium|vk музыка|boosty",
      "subscriptions"),
     (r"vpn|outline|wireguard|nordvpn|surfshark|proton", "subscriptions"),
-    (r"timeweb|hetzner|selectel|aeza|reg\.ru|beget|digitalocean|vultr|linode|cloudflare|vps|vds|хостинг|domain",
+    (r"timeweb|hetzner|selectel|aeza|reg\.ru|beget|digitalocean|vultr|linode|cloudflare|\bvps\b|\bvds\b|хостинг|domain",
      "work"),
     (r"аптек|apteka|eapteka|здравсити|горздрав|ригла|36[,.]6|клиник|стоматолог|анализ|инвитро|invitro|гемотест",
      "health"),
-    (r"спортмастер|sportmaster|decathlon|декатлон|фитнес|fitness|gym|спортзал|world class|xfit|ddx|протеин",
+    (r"спортмастер|sportmaster|decathlon|декатлон|фитнес|fitness|\bgym\b|спортзал|world class|xfit|ddx|протеин",
      "sport"),
-    (r"dns|мвидео|m\.video|эльдорадо|eldorado|citilink|ситилинк|re:store|технопарк|samsung", "tech"),
-    (r"леруа|leroy|obi|икеа|ikea|hoff|хофф|fix price|жкх|жилищн|электроэнерг|мосэнерго|водоканал|интернет|"
-     r"ростелеком|мтс|mts|билайн|beeline|мегафон|megafon|tele2|теле2|yota", "home"),
+    (r"\bdns\b|мвидео|m\.video|эльдорадо|eldorado|citilink|ситилинк|re:store|технопарк|samsung", "tech"),
+    (r"леруа|leroy|\bobi\b|икеа|ikea|\bhoff\b|хофф|fix price|жкх|жилищн|электроэнерг|мосэнерго|водоканал|интернет|"
+     r"ростелеком|\bмтс\b|\bmts\b|билайн|beeline|мегафон|megafon|tele2|теле2|\byota\b", "home"),
     (r"zara|h&m|uniqlo|gloria jeans|befree|ostin|o'stin|lamoda|спортмастер одежда|love republic|befree|"
      r"мегастиль|bershka|pull&bear", "clothes"),
     (r"фнс|налог|nalog|уфк|казначейств", "taxes"),
-    (r"займ|zaim|микрофинанс|мфк|мкк|кредит|loan|weber|moneyman|манимен|екапуста|ekapusta|займер|zaymer|"
+    (r"займ|zaim|микрофинанс|\bмфк\b|\bмкк\b|кредит|loan|weber|moneyman|манимен|екапуста|ekapusta|займер|zaymer|"
      r"lime-zaim|webbankir|вебзайм", "debt"),
 ]
 

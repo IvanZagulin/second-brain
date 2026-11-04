@@ -53,6 +53,22 @@ class BudgetExceeded(ApiError):
 class LlmUnavailable(ApiError):
     status_code = 503
     code = "llm_unavailable"
+    retryable = True
+
+
+class LlmBadRequest(ApiError):
+    """The API rejected the request itself (4xx other than rate limits): a retry with the same input can
+    only fail — and pay the reservation churn — again."""
+    status_code = 502
+    code = "llm_bad_request"
+    retryable = False
+
+
+class LlmTruncated(ApiError):
+    """A structured answer was cut at ``max_tokens``; the job owner must change the request, not retry it."""
+    status_code = 502
+    code = "llm_truncated"
+    retryable = False
 
 
 def _body(code: str, message: str, details: Any = None) -> dict:

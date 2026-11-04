@@ -60,6 +60,8 @@ async def patch_setting(key: str, value: Any = Body(...), auth: Auth = Depends(g
     result = await set_setting(db, auth.owner_id, key, value)
     if key in SECURITY_KEYS:
         await audit(db, auth.owner_id, auth.actor, "change_security_setting", "app_settings", key)
+    if key == "finance" and isinstance(result, dict) and result.get("proverkacheka_token"):
+        result = {**result, "proverkacheka_token": "***"}  # same mask as GET; the token never leaves the server
     return {key: result}
 
 

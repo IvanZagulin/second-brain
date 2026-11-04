@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
@@ -67,6 +68,43 @@ object HealthSync {
     )
 
     fun available(context: Context) = HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE
+
+    /**
+     * Data permissions plus, when this Health Connect version supports it, the right to read in the background
+     * (the 6-hourly worker runs with the app closed). Older providers simply do not get asked for it.
+     */
+    fun permissionsToRequest(context: Context): Set<String> {
+        if (!available(context)) return PERMISSIONS
+        val background = runCatching {
+            HealthConnectClient.getOrCreate(context).features
+                .getFeatureStatus(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND) ==
+                HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+        }.getOrDefault(false)
+        return if (background) PERMISSIONS + HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND else PERMISSIONS
+    }
+
+    /** Foreground sync on app open (throttled): the background worker cannot read without the background permission. */
+    suspend fun syncIfEnabled(c: ru.secondbrain.app.AppContainer, minIntervalMs: Long = 15 * 60_000L) {
+        if (!c.prefs.isPaired()) return
+        val now = System.currentTimeMillis()
+        try {
+            if (c.prefs.get(Prefs.Keys.healthEnabled) == true &&
+                now - (c.prefs.get(Prefs.Keys.lastHealthSync) ?: 0L) > minIntervalMs) {
+                val n = syncHealth(c.context)
+                c.prefs.set(Prefs.Keys.lastHealthSync, now)
+                AppLog.i("health", "uploaded $n records")
+            }
+            if (c.prefs.get(Prefs.Keys.usageEnabled) == true &&
+                now - (c.prefs.get(Prefs.Keys.lastUsageSync) ?: 0L) > minIntervalMs) {
+                syncUsage(c.context)
+                c.prefs.set(Prefs.Keys.lastUsageSync, now)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.w("health", "sync failed: ${e.message}")
+        }
+    }
 
     suspend fun granted(context: Context): Set<String> =
         if (!available(context)) emptySet()

@@ -149,16 +149,17 @@ def _tax_title(kind: str, period: str) -> str:
 async def spending(db: AsyncSession, owner_id: uuid.UUID, start: datetime, end: datetime,
                    scope: str = "personal") -> dict[str, Any]:
     rows = (await db.execute(
-        select(Transaction.category_id, Transaction.flow_type, Transaction.direction,
+        select(Transaction.category_id, Transaction.flow_type, Transaction.direction, Transaction.currency,
                func.sum(Transaction.amount_minor), func.count())
         .where(Transaction.owner_id == owner_id, Transaction.deleted_at.is_(None), Transaction.status.in_(ACTIVE),
                Transaction.scope == scope, Transaction.occurred_at >= start, Transaction.occurred_at < end)
-        .group_by(Transaction.category_id, Transaction.flow_type, Transaction.direction)
+        .group_by(Transaction.category_id, Transaction.flow_type, Transaction.direction, Transaction.currency)
     )).all()
+    fx = (await get_setting(db, owner_id, "finance")).get("fx_rates") or {"USD": 95.0, "EUR": 105.0}
     by_cat: dict[str, int] = defaultdict(int)
     totals = defaultdict(int)
-    for cat, flow, direction, total, _n in rows:
-        total = int(total or 0)
+    for cat, flow, direction, currency, total, _n in rows:
+        total = _to_rub(int(total or 0), currency or "RUB", fx)
         if flow in DISCRETIONARY_FLOWS and direction == "out":
             by_cat[str(cat) if cat else "none"] += total
             totals["expense"] += total
@@ -185,9 +186,12 @@ async def finance_summary(db: AsyncSession, owner_id: uuid.UUID, today: date | N
     balances = await account_balances(db, owner_id)
     personal = [b for b in balances if not b["account"].is_business and b["account"].include_in_free]
     business = [b for b in balances if b["account"].is_business]
-    personal_total = sum(b["balance_minor"] for b in personal)
-    business_total = sum(b["balance_minor"] for b in business)
-    estimated = not personal or any(not b["confirmed"] for b in personal)
+    # Accounts carry their own currency; everything below is in roubles at the owner's FX rates. A foreign
+    # account without a rate is counted at face value and flags the whole picture as estimated.
+    personal_total = sum(_to_rub(b["balance_minor"], b["account"].currency, fx) for b in personal)
+    business_total = sum(_to_rub(b["balance_minor"], b["account"].currency, fx) for b in business)
+    no_rate = any(b["account"].currency != "RUB" and b["account"].currency not in fx for b in personal)
+    estimated = not personal or no_rate or any(not b["confirmed"] for b in personal)
 
     nxt = next_income_date(today, fin.get("income_days") or [])
     days_left = max((nxt - today).days, 1)

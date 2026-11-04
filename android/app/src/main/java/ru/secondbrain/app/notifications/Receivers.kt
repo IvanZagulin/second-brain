@@ -19,7 +19,6 @@ import ru.secondbrain.app.core.AppLog
 import ru.secondbrain.app.core.Prefs
 import ru.secondbrain.app.data.db.BankNotificationEntity
 import ru.secondbrain.app.data.repo.jsonOf
-import java.security.MessageDigest
 import java.util.UUID
 
 private val receiverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -111,7 +110,7 @@ class BankNotificationListener : NotificationListenerService() {
             val text = big ?: extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
                 ?: extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.joinToString("\n")
             if (text.isNullOrBlank()) return@launch
-            val key = sha("${sbn.packageName}|$title|$text|${sbn.postTime / 60000}")
+            val key = bankDedupeKey(sbn.packageName, sbn.key, sbn.postTime, text)
             val id = c.db.bankNotifications().insert(BankNotificationEntity(packageName = sbn.packageName, title = title,
                 text = text, postedAt = sbn.postTime, dedupeKey = key))
             if (id != -1L) {
@@ -121,8 +120,6 @@ class BankNotificationListener : NotificationListenerService() {
         }
     }
 
-    private fun sha(s: String) = MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
-        .joinToString("") { "%02x".format(it) }
 }
 
 /** Injects a synthetic bank notification into the same pipeline (Diagnostics screen, emulator tests). */

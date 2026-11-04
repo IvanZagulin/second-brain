@@ -95,7 +95,8 @@ class AgentNotifier(private val context: Context, private val db: AppDatabase) {
             .setContentIntent(open)
             .setPriority(if (s.priority == "high") NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(if (s.category == "agent") NotificationCompat.CATEGORY_MESSAGE else NotificationCompat.CATEGORY_REMINDER)
-        if (s.sensitive) {
+        // Confirmations approve an agent action: never readable or actionable from the lock screen without unlocking.
+        if (s.sensitive || s.category == "confirm") {
             builder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             builder.setPublicVersion(NotificationCompat.Builder(context, channel).setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("Второй мозг").setContentText("Новое сообщение").build())
@@ -105,11 +106,14 @@ class AgentNotifier(private val context: Context, private val db: AppDatabase) {
             val replyIntent = actionIntent(ACTION_REPLY, notifId, s) { putExtra(EXTRA_CONVERSATION_ID, s.conversationId) }
             val input = RemoteInput.Builder(KEY_REPLY).setLabel("Ответ").build()
             builder.addAction(NotificationCompat.Action.Builder(0, "Ответить", replyIntent).addRemoteInput(input)
-                .setAllowGeneratedReplies(false).build())
+                .setAllowGeneratedReplies(false).setAuthenticationRequired(true).build())
         }
         if (s.actionId != null && s.category == "confirm") {
-            builder.addAction(0, "Подтвердить", actionIntent(ACTION_CONFIRM, notifId, s) { putExtra(EXTRA_ACTION_ID, s.actionId) })
-            builder.addAction(0, "Отклонить", actionIntent(ACTION_REJECT, notifId, s) { putExtra(EXTRA_ACTION_ID, s.actionId) })
+            // API 31+: the device must be unlocked before these buttons fire (no-op on older versions).
+            builder.addAction(NotificationCompat.Action.Builder(0, "Подтвердить",
+                actionIntent(ACTION_CONFIRM, notifId, s) { putExtra(EXTRA_ACTION_ID, s.actionId) }).setAuthenticationRequired(true).build())
+            builder.addAction(NotificationCompat.Action.Builder(0, "Отклонить",
+                actionIntent(ACTION_REJECT, notifId, s) { putExtra(EXTRA_ACTION_ID, s.actionId) }).setAuthenticationRequired(true).build())
         } else {
             builder.addAction(0, "Отложить на час", actionIntent(ACTION_SNOOZE, notifId, s) {})
         }

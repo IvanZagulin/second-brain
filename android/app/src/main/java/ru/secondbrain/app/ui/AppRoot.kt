@@ -56,6 +56,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import ru.secondbrain.app.AppContainer
 import ru.secondbrain.app.core.Prefs
+import kotlinx.coroutines.launch
+import ru.secondbrain.app.health.HealthSync
 import ru.secondbrain.app.ui.agent.AgentHistoryScreen
 import ru.secondbrain.app.ui.agent.AgentJobsScreen
 import ru.secondbrain.app.ui.agent.PersonaScreen
@@ -212,6 +214,7 @@ private fun MainScaffold(container: AppContainer, pendingRoute: MutableState<Str
         container.sync.requestSync(0)
         container.updates.checkIfStale()
         container.initPush()
+        container.scope.launch { HealthSync.syncIfEnabled(container) }
     }
     LaunchedEffect(pendingRoute.value) {
         pendingRoute.value?.let { route ->

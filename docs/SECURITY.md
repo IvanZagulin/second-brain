@@ -49,6 +49,11 @@ instructions.
 Daily encrypted dumps (AES-256, PBKDF2) verified after writing, kept separately from the database volume, with a
 retention window and a documented restore check. Store `BACKUP_PASSPHRASE` off the server.
 
+## Startup guard
+
+In production the API refuses to start while `SECRET_KEY` is the example value or shorter than 32 characters,
+and does not serve `/api/docs` or `/api/openapi.json`.
+
 ## Rotate after setup
 
 Credentials shared during setup (server SSH key, GitHub token, Claude API key) should be rotated once the system

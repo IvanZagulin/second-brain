@@ -54,6 +54,12 @@ async def recover_stuck() -> None:
 
 async def sweep() -> None:
     async with session_scope() as db:
+        # ``sending`` is a claim held by a worker; one older than 5 minutes died mid-send and is reclaimed.
+        stale = (await db.execute(update(Notification).where(
+            Notification.push_status == "sending", Notification.created_at < utcnow() - timedelta(minutes=5))
+            .values(push_status="pending"))).rowcount
+        if stale:
+            log.warning("reclaimed %d stuck push claims", stale)
         pending_push = (await db.execute(select(Notification.id).where(
             Notification.push_status == "pending", Notification.created_at < utcnow() - timedelta(seconds=30))
             .limit(50))).scalars().all()

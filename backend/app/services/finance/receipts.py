@@ -69,7 +69,14 @@ async def _link_transaction(db: AsyncSession, receipt: Receipt) -> None:
     if not receipt.total_minor or not receipt.occurred_at:
         return
     direction = "in" if receipt.op_type == "2" else "out"  # n=2 is a refund
-    fp = hashlib.sha256(f"receipt|{receipt.fn}|{receipt.fd}|{receipt.fp}|{receipt.total_minor}".encode()).hexdigest()
+    if receipt.fn or receipt.fd or receipt.fp:
+        key = f"receipt|{receipt.fn}|{receipt.fd}|{receipt.fp}|{receipt.total_minor}"
+    else:
+        # A photo/PDF receipt without fiscal fields: two different receipts for the same total must not
+        # collapse into one, but the same file uploaded twice should. Key on the file's hash.
+        att = await db.get(Attachment, receipt.attachment_id) if receipt.attachment_id else None
+        key = f"receipt|file|{att.sha256 if att else receipt.id}|{receipt.total_minor}"
+    fp = hashlib.sha256(key.encode()).hexdigest()
     res = await ingest_evidence(
         db, receipt.owner_id, kind="receipt", fingerprint=fp, amount_minor=receipt.total_minor, direction=direction,
         flow_type="refund" if direction == "in" else "expense", occurred_at=receipt.occurred_at, has_time=True,

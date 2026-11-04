@@ -76,6 +76,7 @@ class NotificationIn(BaseModel):
     title: str | None = None
     text: str = Field(min_length=1, max_length=2000)
     posted_at: datetime
+    dedupe_key: str | None = Field(None, max_length=128)  # the phone's own id, echoed back so results match by key
 
 
 class NotificationsIn(BaseModel):
@@ -89,7 +90,7 @@ async def notifications(body: NotificationsIn, auth: Auth = Depends(get_auth), d
     for n in body.items:
         res = await ingest_notification(db, auth.owner_id, package=n.package, title=n.title, text=n.text,
                                         posted_at=n.posted_at)
-        results.append(res.as_dict())
+        results.append({**res.as_dict(), "dedupe_key": n.dedupe_key})
     return {"results": results}
 
 

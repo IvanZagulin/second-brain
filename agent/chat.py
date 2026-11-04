@@ -28,7 +28,9 @@ from app.core.timeutil import utcnow
 from app.models import AgentJob, AgentProfile, Attachment, Conversation, Message, User
 from app.services.crud import serialize
 from app.services.llm import budget
-from app.services.llm.client import build_params, call, estimate_request_tokens, get_client, resolve_route
+from app.services.llm.client import (
+    build_params, call, estimate_request_tokens, get_client, partial_usage, resolve_route,
+)
 from app.services.llm.pricing import estimate_usd
 from app.services.settings import get_setting
 
@@ -263,6 +265,7 @@ async def _model_loop(owner_id: uuid.UUID, conversation_id: uuid.UUID, system: s
             return
         params = build_params(model=model, effort=effort, system=system, messages=messages,
                               max_tokens=CHAT_MAX_TOKENS, tools=tools)
+        stream = None
         try:
             async with get_client().beta.messages.stream(**params) as stream:
                 async for event in stream:
@@ -276,8 +279,10 @@ async def _model_loop(owner_id: uuid.UUID, conversation_id: uuid.UUID, system: s
                 message = await stream.get_final_message()
             json_retries = 0
         except ValueError:
+            # The model's tool input didn't parse: the tokens were still generated and billed.
             await budget.settle(owner_id, reservation, model=model, purpose=purpose, ok=False,
-                                conversation_id=conversation_id, meta={"error": "tool_json"})
+                                conversation_id=conversation_id, usage=partial_usage(stream), fallback_cost=est,
+                                meta={"error": "tool_json"})
             json_retries += 1
             if json_retries > 2:
                 yield {"type": "error", "code": "tool_json", "message": "Модель сформировала некорректный вызов инструмента"}
@@ -291,8 +296,11 @@ async def _model_loop(owner_id: uuid.UUID, conversation_id: uuid.UUID, system: s
             yield {"type": "error", "code": "llm_error", "message": f"Claude API: ошибка {exc.status_code}"}
             return
         except (anthropic.APIConnectionError, anthropic.APITimeoutError):
+            # Unknown outcome (the stream may have dropped after most of the answer): book what the partial
+            # snapshot shows, else the reservation, so the month never under-counts.
             await budget.settle(owner_id, reservation, model=model, purpose=purpose, ok=False,
-                                conversation_id=conversation_id, meta={"error": "connection"})
+                                conversation_id=conversation_id, usage=partial_usage(stream), fallback_cost=est,
+                                meta={"error": "connection"})
             yield {"type": "error", "code": "llm_unavailable", "message": "Нет связи с Claude API"}
             return
 

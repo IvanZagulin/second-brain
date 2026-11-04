@@ -158,8 +158,11 @@ def usage_cost(model: str, usage: Any) -> tuple[Decimal, dict[str, int]]:
 
 async def settle(owner_id: uuid.UUID, reservation_id: uuid.UUID | None, *, model: str, purpose: str,
                  usage: Any = None, job_id: uuid.UUID | None = None, conversation_id: uuid.UUID | None = None,
-                 request_id: str | None = None, ok: bool = True, meta: dict | None = None) -> Decimal:
-    cost, totals = usage_cost(model, usage) if usage is not None else (Decimal(0), {
+                 request_id: str | None = None, ok: bool = True, meta: dict | None = None,
+                 fallback_cost: Decimal | None = None) -> Decimal:
+    """``fallback_cost``: what to book when the outcome is unknown (a stream that dropped after tokens were
+    produced): Anthropic has charged for them, so the month must count them even without a usage object."""
+    cost, totals = usage_cost(model, usage) if usage is not None else (fallback_cost or Decimal(0), {
         "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0})
     async with session_scope() as db:
         before = await budget_state(db, owner_id)

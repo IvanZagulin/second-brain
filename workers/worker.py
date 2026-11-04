@@ -8,7 +8,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from agent import jobs, reports, rules
 from app.core.config import get_settings
@@ -40,9 +40,15 @@ async def run_system_task(ctx: dict, name: str, owner_id: str) -> Any:
 
 async def push_notification(ctx: dict, notification_id: str) -> str:
     async with session_scope() as db:
-        n = await db.get(Notification, uuid.UUID(notification_id))
-        if n is None or n.push_status != "pending":
+        # Claim it first: the scheduler's sweep re-enqueues anything still pending after 30 s, and a backlogged
+        # worker would otherwise send the same push twice.
+        claimed = (await db.execute(
+            update(Notification).where(Notification.id == uuid.UUID(notification_id),
+                                       Notification.push_status == "pending")
+            .values(push_status="sending").returning(Notification.id))).scalar_one_or_none()
+        if claimed is None:
             return "skip"
+        n = await db.get(Notification, uuid.UUID(notification_id))
         devices = (await db.execute(select(Device).where(Device.owner_id == n.owner_id, Device.revoked_at.is_(None),
                                                          Device.fcm_token.is_not(None)))).scalars().all()
         if not devices or not fcm.available:

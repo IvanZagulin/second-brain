@@ -173,11 +173,12 @@ def crud_router(model: type[Base], prefix: str, tag: str, *, order_by: str | Non
         if obj is None or obj.owner_id != auth.owner_id:
             raise NotFound("Запись не найдена")
         data = coerce_numeric(model, body.model_dump(exclude_unset=True))
+        before = {k: getattr(obj, k, None) for k in data}  # hooks that keep running totals need the old values
         for k, v in data.items():
             setattr(obj, k, v)
         if hasattr(obj, "version"):
             obj.version += 1
-        await run_hooks(db, auth.owner_id, obj, "update", data)
+        await run_hooks(db, auth.owner_id, obj, "update", {**data, "_before": before})
         await db.flush()
         await db.refresh(obj)
         return serialize(obj)

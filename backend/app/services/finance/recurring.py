@@ -5,14 +5,14 @@ from __future__ import annotations
 import statistics
 import uuid
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.timeutil import utcnow
-from app.models import Subscription, TaxPayment, Transaction
+from app.core.timeutil import local_now, tz, utcnow
+from app.models import Subscription, TaxPayment, Transaction, User
 from app.services.settings import get_setting
 
 
@@ -65,31 +65,46 @@ async def refresh_tax_calendar(db: AsyncSession, owner_id: uuid.UUID, year: int 
     regime = cfg.get("regime", "usn6")
     if regime == "none":
         return []
-    year = year or date.today().year
+    user = await db.get(User, owner_id)
+    zone = tz(user.timezone if user else None)
+    today = local_now(user.timezone if user else None).date()  # the owner's calendar, not the server's
+    year = year or today.year
     rate = float(cfg.get("rate_pct", 6)) / 100
 
-    async def income_until(month_end: int) -> int:
-        start = date(year, 1, 1)
-        end = date(year + (month_end == 12), (month_end % 12) + 1, 1)
+    async def total_until(month_end: int, direction: str, flow_type: str) -> int:
+        start = datetime.combine(date(year, 1, 1), time.min, zone)
+        end = datetime.combine(date(year + (month_end == 12), (month_end % 12) + 1, 1), time.min, zone)
         value = (await db.execute(
             select(func.coalesce(func.sum(Transaction.amount_minor), 0)).where(
                 Transaction.owner_id == owner_id, Transaction.deleted_at.is_(None), Transaction.scope == "business",
-                Transaction.direction == "in", Transaction.flow_type == "income",
+                Transaction.direction == direction, Transaction.flow_type == flow_type,
                 Transaction.occurred_at >= start, Transaction.occurred_at < end)
         )).scalar_one()
         return int(value or 0)
+
+    async def income_until(month_end: int) -> int:
+        return await total_until(month_end, "in", "income")
+
+    async def usn_tax(month_end: int) -> int:
+        """УСН «доходы»: доход × ставка. УСН «доходы минус расходы»: (доход − расходы) × ставка, но не меньше
+        минимального налога 1 % от дохода."""
+        income = await income_until(month_end)
+        if regime == "usn15":
+            expenses = await total_until(month_end, "out", "expense")
+            return max(int((income - expenses) * rate), income // 100)
+        return int(income * rate)
 
     plan: list[tuple[str, str, date, int]] = []
     insurance = int(cfg.get("insurance_fixed_minor", 0))
     if regime in ("usn6", "usn15"):
         paid_before = 0
         for q, (m, d) in QUARTER_DUE.items():
-            cumulative = int(await income_until(q * 3) * rate)
+            cumulative = await usn_tax(q * 3)
             if cfg.get("reduce_by_insurance") and regime == "usn6":
                 cumulative = max(cumulative - insurance * q // 4, 0)
             plan.append(("usn_advance", f"{year}-Q{q}", date(year, m, d), max(cumulative - paid_before, 0)))
             paid_before = max(cumulative, paid_before)
-        annual = int(await income_until(12) * rate)
+        annual = await usn_tax(12)
         if cfg.get("reduce_by_insurance") and regime == "usn6":
             annual = max(annual - insurance, 0)
         plan.append(("usn_annual", str(year), date(year + 1, 4, 28), max(annual - paid_before, 0)))
@@ -114,7 +129,7 @@ async def refresh_tax_calendar(db: AsyncSession, owner_id: uuid.UUID, year: int 
             db.add(row)
         elif row.status != "paid":
             row.estimated_minor, row.due_date = amount, due
-            if due < date.today() and row.paid_minor < amount:
+            if due < today and row.paid_minor < amount:
                 row.status = "overdue"
         result.append(row)
     await db.flush()

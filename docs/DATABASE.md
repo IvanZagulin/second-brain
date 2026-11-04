@@ -9,7 +9,8 @@ PostgreSQL 16 with `vector` (pgvector) and `pg_trgm`. Models: `backend/app/model
 - Money: `BIGINT` minor units (kopecks) + `currency CHAR(3)`; never floats.
 - Mirrored (offline) tables have `SyncMixin`: client-generated UUID `id`, `version` (optimistic concurrency),
   `deleted_at` tombstone, `client_updated_at`, and `server_seq` — taken from the global sequence `sync_seq` on
-  insert and bumped by the `bump_server_seq()` trigger on every update. `server_seq` is the pull cursor.
+  insert and bumped by the `bump_server_seq()` trigger on every update (except updates that touch only the
+  usage counters `use_count`/`last_used_at`). `server_seq` is the pull cursor.
 - Raw imported data (`import_*`, `transaction_sources`) is kept apart from derived knowledge (`memories`,
   `people`, `life_events`, `transactions`).
 
@@ -41,6 +42,10 @@ PostgreSQL 16 with `vector` (pgvector) and `pg_trgm`. Models: `backend/app/model
   foreign-key order; on a version conflict the later `client_updated_at` wins and the loser receives the server
   copy (`conflict_server_wins`).
 - `GET /api/v1/sync/pull?cursor=N` — rows with `server_seq > N` across all mirrored tables, in global order.
+  `server_seq` is drawn when a row is written, not when its transaction commits, so a long transaction can
+  commit a lower seq after a shorter one committed a higher seq. PostgreSQL runs with
+  `track_commit_timestamp = on` (compose file) and the pull also re-sends rows at or below the cursor whose
+  transaction committed in the last 3 minutes; the phone applies them idempotently by `version`.
 
 The phone stores mirrored rows as JSON documents in a SQLCipher-encrypted Room database (`records`), with an
 `outbox` for local changes, `pending_messages` for chat written offline and `bank_notifications` for captured

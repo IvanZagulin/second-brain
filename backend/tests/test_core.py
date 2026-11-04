@@ -278,3 +278,61 @@ def test_archive_compact_format_and_estimate():
         "== 29.03.2021, пн ==", "1 12:53 Д: привет", "2 Я: как / ты", "3 12:55 Д2: ок"]
     economy, balanced = estimate_cost(13_800_000, 1, 590_000, "economy"), estimate_cost(13_800_000, 1, 590_000)
     assert economy < balanced and 10 < balanced < 40
+
+
+# ---------------------------------------------------------------- 2026-11-04 fixes
+
+@pytest.mark.parametrize("merchant,expected", [
+    ("MOBILE TELESYSTEMS", None),          # "obi" inside MOBILE used to mean "home"
+    ("ACTIVISION", None),                  # "ivi" inside ACTIVISION used to mean "subscriptions"
+    ("PATRIOT AUTO", None),                # "riot" inside PATRIOT used to mean "games"
+    ("OBI Химки", "home"),
+    ("IVI", "subscriptions"),
+    ("ЛЕНТА 123", "products"),
+    ("DNS Ритейл", "tech"),
+    ("МТС", "home"),
+])
+def test_merchant_hints_respect_word_boundaries(merchant, expected):
+    assert hint_category(merchant, None, None) == expected
+
+
+def test_next_due_monthly_and_local_weekday():
+    from app.models import Task
+    from app.services.hooks import _next_due
+
+    # 31 January 23:30 Moscow is 20:30 UTC: the next occurrence must be the last day of February, same time.
+    t = Task(title="Платёж", repeat_rule="monthly:31", due_at=datetime(2026, 1, 31, 20, 30, tzinfo=UTC))
+    nxt = _next_due(t, "Europe/Moscow")
+    assert (nxt.year, nxt.month, nxt.day) == (2026, 2, 28)
+    assert nxt.astimezone(tz("Europe/Moscow")).hour == 23
+    # Friday 23:30 Moscow is Friday 20:30 UTC; "weekdays" must give Monday, not the UTC-based Saturday skip.
+    t = Task(title="Отчёт", repeat_rule="weekdays", due_at=datetime(2026, 1, 30, 20, 30, tzinfo=UTC))
+    assert _next_due(t, "Europe/Moscow").astimezone(tz("Europe/Moscow")).isoweekday() == 1
+
+
+def test_partial_usage_reads_stream_snapshot():
+    from types import SimpleNamespace
+
+    from app.services.llm.client import partial_usage
+
+    assert partial_usage(None) is None
+    empty = SimpleNamespace(current_message_snapshot=SimpleNamespace(usage=SimpleNamespace(input_tokens=0, output_tokens=0)))
+    assert partial_usage(empty) is None
+    half = SimpleNamespace(current_message_snapshot=SimpleNamespace(usage=SimpleNamespace(input_tokens=1200, output_tokens=80)))
+    assert partial_usage(half).output_tokens == 80
+
+
+def test_non_retryable_llm_errors():
+    from app.core.errors import LlmBadRequest, LlmTruncated, LlmUnavailable
+
+    assert LlmUnavailable("x").retryable is True
+    assert LlmBadRequest("x").retryable is False
+    assert LlmTruncated("x").retryable is False
+
+
+def test_to_rub_uses_fx_and_keeps_rub():
+    from app.services.finance.engine import _to_rub
+
+    assert _to_rub(10_000, "RUB", {"USD": 95.0}) == 10_000
+    assert _to_rub(10_000, "USD", {"USD": 95.0}) == 950_000
+    assert _to_rub(10_000, "EUR", {"USD": 95.0}) == 10_000  # no rate: face value (and flagged estimated upstream)

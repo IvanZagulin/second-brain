@@ -30,16 +30,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import ru.secondbrain.app.AppContainer
 import ru.secondbrain.app.MainActivity
 import ru.secondbrain.app.SecondBrainApp
 import ru.secondbrain.app.core.Prefs
+import ru.secondbrain.app.core.rub
 import ru.secondbrain.app.data.model.E
 import ru.secondbrain.app.data.repo.jsonOf
 import ru.secondbrain.app.data.repo.str
@@ -102,8 +106,7 @@ class ShareActivity : FragmentActivity() {
             if (!c.prefs.isPaired()) { result = "Сначала подключите приложение к серверу"; return@launch }
             if (!unlock(c)) return@launch
             busy = true
-            try { block() } catch (e: Exception) { result = e.message ?: "Ошибка" }
-            busy = false
+            try { block() } catch (e: CancellationException) { throw e } catch (e: Exception) { result = e.message ?: "Ошибка" } finally { busy = false }
         }
 
         suspend fun uploadAttachment(): String {
@@ -140,7 +143,7 @@ class ShareActivity : FragmentActivity() {
                     val att = uploadAttachment()
                     val r = c.api.post("/api/v1/finance/receipts/attachment", jsonOf("attachment_id" to att)).jsonObject
                     c.sync.requestSync(0)
-                    result = "Чек: ${r.str("store") ?: ""} ${r["total_minor"]?.toString() ?: ""}"
+                    result = "Чек: ${r.str("store") ?: ""} ${rub(r["total_minor"]?.jsonPrimitive?.longOrNull, kopecks = true)}"
                 } }) { Text("Это чек") }
                 if (isPdf || isTable) Button(onClick = { run {
                     val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }

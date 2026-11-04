@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.timeutil import in_quiet_hours, local_now
@@ -32,8 +33,14 @@ async def create_notification(db: AsyncSession, owner_id: uuid.UUID, *, title: s
     n = Notification(owner_id=owner_id, title=title[:200], body=body[:4000], category=category,
                      priority=priority, silent=silent, conversation_id=conversation_id, message_id=message_id,
                      action_id=action_id, data=data or {}, dedupe_key=dedupe_key, sensitive=sensitive)
-    db.add(n)
-    await db.flush()
+    try:
+        # Savepoint: two concurrent writers crossing the same dedupe key (a budget threshold hit by two calls
+        # at once) must not fail the caller's transaction — the usage row it carries would roll back too.
+        async with db.begin_nested():
+            db.add(n)
+            await db.flush()
+    except IntegrityError:
+        return None
     # Deferred so the row is committed before the worker reads it; the scheduler sweeps stragglers.
     await enqueue("push_notification", str(n.id), job_id=f"push:{n.id}", defer_seconds=3)
     return n

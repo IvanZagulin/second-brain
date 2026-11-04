@@ -35,11 +35,15 @@ class ChatRepository(
             "client_message_id" to clientMessageId, "mode" to mode,
         )).onCompletion { sync.requestSync(0) }
 
-    /** Offline or background (notification reply): queue and let the sync worker deliver it. */
+    /**
+     * Offline or background (notification reply): queue and let the sync worker deliver it.
+     * [clientMessageId] must be the id a failed [send] used, so the server sees one message, not two.
+     */
     suspend fun queueMessage(conversationId: String, text: String, attachmentIds: List<String> = emptyList(),
-                             mode: String? = null, source: String = "app") {
+                             mode: String? = null, source: String = "app",
+                             clientMessageId: String = UUID.randomUUID().toString()) {
         db.pendingMessages().upsert(PendingMessageEntity(
-            clientMessageId = UUID.randomUUID().toString(), conversationId = conversationId, text = text,
+            clientMessageId = clientMessageId, conversationId = conversationId, text = text,
             attachmentIds = JsonArray(attachmentIds.map { JsonPrimitive(it) }).toString(), mode = mode,
         ))
         sync.requestSync(0)

@@ -1,5 +1,6 @@
 package ru.secondbrain.app.data.repo
 
+import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.KSerializer
@@ -95,42 +96,50 @@ class RecordStore(private val db: AppDatabase, private val onLocalChange: () -> 
      */
     suspend fun save(entity: String, fields: JsonObject, id: String? = null): String {
         val recordId = id ?: fields.str("id") ?: UUID.randomUUID().toString()
-        val existing = records.get(entity, recordId)
-        val base = existing?.let { PlainJson.parseToJsonElement(it.data).jsonObject } ?: JsonObject(emptyMap())
-        val merged = JsonObject(base + fields + ("id" to JsonPrimitive(recordId)))
-        records.upsert(
-            RecordEntity(entity = entity, id = recordId, data = merged.toString(),
-                parentId = PARENT[entity]?.let { merged.str(it) }, sortAt = SORT[entity]?.let { merged.str(it) }
-                    ?: existing?.sortAt ?: nowIso(),
-                version = existing?.version ?: 0, serverSeq = existing?.serverSeq ?: 0, deleted = false, dirty = true)
-        )
-        val payload = JsonObject(merged.filterKeys { it !in SERVER_FIELDS })
-        val queued = db.outbox().find(entity, recordId)
-        db.outbox().put(OutboxEntity(seq = queued?.seq ?: 0, entity = entity, recordId = recordId, op = "upsert",
-            data = payload.toString(), baseVersion = queued?.baseVersion ?: existing?.version?.takeIf { it > 0 },
-            clientUpdatedAt = nowIso()))
+        // One transaction: a concurrent push() or applyServer() must see the record and its outbox row together.
+        db.withTransaction {
+            val existing = records.get(entity, recordId)
+            val base = existing?.let { PlainJson.parseToJsonElement(it.data).jsonObject } ?: JsonObject(emptyMap())
+            val merged = JsonObject(base + fields + ("id" to JsonPrimitive(recordId)))
+            records.upsert(
+                RecordEntity(entity = entity, id = recordId, data = merged.toString(),
+                    parentId = PARENT[entity]?.let { merged.str(it) }, sortAt = SORT[entity]?.let { merged.str(it) }
+                        ?: existing?.sortAt ?: nowIso(),
+                    version = existing?.version ?: 0, serverSeq = existing?.serverSeq ?: 0, deleted = false, dirty = true)
+            )
+            val payload = JsonObject(merged.filterKeys { it !in SERVER_FIELDS })
+            val queued = db.outbox().find(entity, recordId)
+            db.outbox().put(OutboxEntity(seq = queued?.seq ?: 0, entity = entity, recordId = recordId, op = "upsert",
+                data = payload.toString(), baseVersion = queued?.baseVersion ?: existing?.version?.takeIf { it > 0 },
+                clientUpdatedAt = nowIso()))
+        }
         onLocalChange()
         return recordId
     }
 
     suspend fun delete(entity: String, id: String) {
-        val existing = records.get(entity, id) ?: return
-        records.upsert(existing.copy(deleted = true, dirty = true, updatedAt = System.currentTimeMillis()))
-        val queued = db.outbox().find(entity, id)
-        db.outbox().put(OutboxEntity(seq = queued?.seq ?: 0, entity = entity, recordId = id, op = "delete", data = "{}",
-            baseVersion = existing.version.takeIf { it > 0 }, clientUpdatedAt = nowIso()))
-        onLocalChange()
+        val changed = db.withTransaction {
+            val existing = records.get(entity, id) ?: return@withTransaction false
+            records.upsert(existing.copy(deleted = true, dirty = true, updatedAt = System.currentTimeMillis()))
+            val queued = db.outbox().find(entity, id)
+            db.outbox().put(OutboxEntity(seq = queued?.seq ?: 0, entity = entity, recordId = id, op = "delete", data = "{}",
+                baseVersion = existing.version.takeIf { it > 0 }, clientUpdatedAt = nowIso()))
+            true
+        }
+        if (changed) onLocalChange()
     }
 
     /** Apply a server row (from pull or a REST response). Local unsynced edits win until pushed. */
     suspend fun applyServer(entity: String, id: String, data: JsonObject, version: Int, serverSeq: Long, deleted: Boolean,
                             parentId: String? = null, sortAt: String? = null) {
-        val local = records.get(entity, id)
-        if (local != null && local.dirty && db.outbox().find(entity, id) != null) return
-        records.upsert(RecordEntity(entity = entity, id = id, data = data.toString(),
-            parentId = parentId ?: PARENT[entity]?.let { data.str(it) },
-            sortAt = sortAt ?: SORT[entity]?.let { data.str(it) } ?: data.str("created_at"),
-            version = version, serverSeq = serverSeq, deleted = deleted, dirty = false))
+        db.withTransaction {
+            // An outbox row means a local edit is waiting to be pushed (whatever the dirty flag says): keep it.
+            if (db.outbox().find(entity, id) != null) return@withTransaction
+            records.upsert(RecordEntity(entity = entity, id = id, data = data.toString(),
+                parentId = parentId ?: PARENT[entity]?.let { data.str(it) },
+                sortAt = sortAt ?: SORT[entity]?.let { data.str(it) } ?: data.str("created_at"),
+                version = version, serverSeq = serverSeq, deleted = deleted, dirty = false))
+        }
     }
 
     /** Insert an object returned by a REST call so the UI updates before the next pull. */

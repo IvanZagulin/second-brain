@@ -78,12 +78,15 @@ async def search_memories(db: AsyncSession, owner_id: uuid.UUID, query: str, *, 
             return []
     vectors = await embed([query], "query")
     vec = to_pgvector(vectors[0]) if vectors else None
+    # A memory without an embedding yet (new, or the embedder was down) must not sort last: NULL in the
+    # ORDER BY expression would push an exact full-text hit to the bottom.
+    vsim = "COALESCE(1 - (e.embedding <=> CAST(:vec AS vector)), 0)" if vec else "0"
     sql = f"""
         WITH q AS (SELECT websearch_to_tsquery('russian', :q) AS tsq)
         SELECT m.id,
                ts_rank_cd(m.tsv, q.tsq) AS fts,
                similarity(m.content, :q) AS trgm,
-               {"1 - (e.embedding <=> CAST(:vec AS vector))" if vec else "0"} AS vsim
+               {vsim} AS vsim
         FROM memories m
         CROSS JOIN q
         LEFT JOIN memory_embeddings e ON e.memory_id = m.id
@@ -93,7 +96,7 @@ async def search_memories(db: AsyncSession, owner_id: uuid.UUID, query: str, *, 
           {"" if include_secret else "AND m.sensitivity <> 'secret'"}
           AND (m.tsv @@ q.tsq OR similarity(m.content, :q) > 0.12
                {"OR (e.embedding <=> CAST(:vec AS vector)) < 0.55" if vec else ""})
-        ORDER BY (0.55 * {"1 - (e.embedding <=> CAST(:vec AS vector))" if vec else "0"}
+        ORDER BY (0.55 * {vsim}
                   + 0.30 * LEAST(ts_rank_cd(m.tsv, q.tsq) * 10, 1)
                   + 0.15 * similarity(m.content, :q)
                   + 0.02 * m.importance) DESC NULLS LAST
@@ -111,8 +114,8 @@ async def search_memories(db: AsyncSession, owner_id: uuid.UUID, query: str, *, 
         return []
     scores = {r.id: 0.55 * float(r.vsim or 0) + 0.3 * min(float(r.fts or 0) * 10, 1) + 0.15 * float(r.trgm or 0)
               for r in rows}
-    # Usage counters are bumped with plain SQL (no ORM sync, no updated_at/server_seq churn) before
-    # the rows are loaded, so the returned objects are fresh.
+    # Usage counters are bumped with plain SQL (no ORM sync, no updated_at churn; the server_seq trigger skips
+    # updates that touch only these two columns) before the rows are loaded, so the returned objects are fresh.
     await db.execute(text("UPDATE memories SET use_count = use_count + 1, last_used_at = now() WHERE id = ANY(:ids)"),
                      {"ids": list(scores)})
     mems = (await db.execute(select(Memory).where(Memory.id.in_(scores))

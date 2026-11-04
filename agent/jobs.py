@@ -237,6 +237,14 @@ async def run_job(job_id: uuid.UUID) -> dict[str, Any]:
     except BudgetExceeded as exc:
         status, error = "budget", exc.message
         retry_at = utcnow() + timedelta(hours=6)
+    except ApiError as exc:
+        if getattr(exc, "retryable", True):
+            log.warning("job %s (%s) failed: %s", job_id, snap["kind"], exc.message)
+            status, error = "error", f"{exc.code}: {exc.message[:300]}"
+        else:
+            # A rejected or truncated request fails the same way every time; retrying only burns reservations.
+            log.warning("job %s (%s) failed for good: %s", job_id, snap["kind"], exc.message)
+            status, error = "fatal", f"{exc.code}: {exc.message[:300]}"
     except Exception as exc:
         log.exception("job %s (%s) failed", job_id, snap["kind"])
         status, error = "error", f"{type(exc).__name__}: {str(exc)[:300]}"
@@ -252,7 +260,8 @@ async def run_job(job_id: uuid.UUID) -> dict[str, Any]:
         if status == "done" and isinstance(result, dict) and result.get("continue") and job.status != "cancelled":
             # A long job finished one slice (see agent.archive.SLICE_SECONDS): run the next one right away.
             job.status, job.attempts, job.next_run_at = "scheduled", 0, utcnow()
-        elif status == "done" or (status == "error" and job.attempts >= job.max_attempts) or job.status == "cancelled":
+        elif status in ("done", "fatal") or (status == "error" and job.attempts >= job.max_attempts) \
+                or job.status == "cancelled":
             if job.recurrence and job.status != "cancelled":
                 job.status, job.attempts = "scheduled", 0
                 job.next_run_at = next_occurrence(job.recurrence, utcnow(), tz_name)

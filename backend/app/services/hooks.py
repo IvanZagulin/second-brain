@@ -3,17 +3,20 @@ API and the worker so the registry is populated in both."""
 
 from __future__ import annotations
 
+import calendar
 import uuid
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.timeutil import utcnow
-from app.models import AgentJob, BodyMetric, Note, Task, Transaction, WishlistItem, Workout
+from app.core.timeutil import tz, utcnow
+from app.models import AgentJob, BodyMetric, Note, Task, Transaction, User, WishlistItem, Workout
 from app.services.crud import on_write
 from app.services.events import emit
 from app.services.finance.categorize import apply_rules, learn_correction, normalize_merchant
+from app.services.finance.engine import _advance
 from app.services.memory import upsert_memory
 
 
@@ -58,9 +61,12 @@ async def _metric(db: AsyncSession, owner_id: uuid.UUID, m: BodyMetric, op: str,
                    dedupe_key=f"weight:{m.id}")
 
 
-def _next_due(task: Task):
+def _next_due(task: Task, tz_name: str | None = None):
+    """Next occurrence in the owner's local calendar: weekday rules on a UTC timestamp pick the wrong day for a
+    late-evening Moscow deadline, and "+30 days" is not a month."""
     rule = task.repeat_rule or ""
-    base = task.due_at or utcnow()
+    zone = tz(tz_name)
+    base = (task.due_at or utcnow()).astimezone(zone)
     if rule == "daily":
         return base + timedelta(days=1)
     if rule == "weekdays":
@@ -74,8 +80,12 @@ def _next_due(task: Task):
             cand = base + timedelta(days=add)
             if cand.isoweekday() in days:
                 return cand
-    if rule.startswith("monthly:"):
-        return base + timedelta(days=30)
+    if rule.startswith("monthly"):
+        nd = _advance(base.date(), "monthly", None)
+        wanted = rule.split(":", 1)[1] if ":" in rule else ""
+        if wanted.strip().isdigit():
+            nd = nd.replace(day=min(int(wanted), calendar.monthrange(nd.year, nd.month)[1]))
+        return base.replace(year=nd.year, month=nd.month, day=nd.day)
     if rule.startswith("every:") and rule.endswith("d"):
         return base + timedelta(days=int(rule[6:-1] or 1))
     return None
@@ -83,10 +93,20 @@ def _next_due(task: Task):
 
 @on_write("tasks")
 async def _task(db: AsyncSession, owner_id: uuid.UUID, t: Task, op: str, changes: dict[str, Any]) -> None:
-    if changes.get("status") == "done":
+    before = changes.get("_before") or {}
+    if changes.get("status") == "done" and before.get("status") != "done":
         t.completed_at = t.completed_at or utcnow()
-        nxt = _next_due(t) if t.repeat_rule else None
-        if nxt is not None:
+        if not t.repeat_rule:
+            return
+        user = await db.get(User, owner_id)
+        nxt = _next_due(t, user.timezone if user else None)
+        if nxt is None:
+            return
+        # A replayed sync push or a REST call followed by a sync must not spawn a second instance.
+        exists = (await db.execute(select(Task.id).where(
+            Task.owner_id == owner_id, Task.deleted_at.is_(None), Task.id != t.id, Task.title == t.title,
+            Task.repeat_rule == t.repeat_rule, Task.due_at == nxt))).scalar_one_or_none()
+        if exists is None:
             db.add(Task(owner_id=owner_id, title=t.title, notes=t.notes, due_at=nxt, has_time=t.has_time,
                         priority=t.priority, repeat_rule=t.repeat_rule, commitment=t.commitment, source=t.source,
                         remind_at=(nxt - (t.due_at - t.remind_at)) if t.remind_at and t.due_at else None))
@@ -110,6 +130,10 @@ async def _debt_payment(db: AsyncSession, owner_id: uuid.UUID, p, op: str, chang
         debt.balance_minor = max(debt.balance_minor - p.amount_minor, 0)
     elif op == "delete":
         debt.balance_minor += p.amount_minor
+    elif op == "update" and "amount_minor" in changes:
+        old = (changes.get("_before") or {}).get("amount_minor")
+        if old is not None:
+            debt.balance_minor = max(debt.balance_minor + int(old) - p.amount_minor, 0)
     if debt.balance_minor == 0 and debt.status != "closed":
         debt.status = "closed"
     elif debt.balance_minor > 0 and debt.status == "closed":
@@ -127,8 +151,15 @@ async def _goal_contribution(db: AsyncSession, owner_id: uuid.UUID, c, op: str, 
         goal.saved_minor += c.amount_minor
     elif op == "delete":
         goal.saved_minor -= c.amount_minor
+    elif op == "update" and "amount_minor" in changes:
+        old = (changes.get("_before") or {}).get("amount_minor")
+        if old is not None:
+            goal.saved_minor += c.amount_minor - int(old)
+    goal.saved_minor = max(goal.saved_minor, 0)
     if goal.saved_minor >= goal.target_minor and goal.status == "active":
         goal.status = "done"
+    elif goal.saved_minor < goal.target_minor and goal.status == "done":
+        goal.status = "active"  # a removed or reduced contribution reopens the goal
     goal.version += 1
 
 

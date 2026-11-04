@@ -256,6 +256,8 @@ fun ChatScreen(conversationId: String, initial: String? = null) {
         live = LiveTurn(text)
         val clientId = UUID.randomUUID().toString()
         scope.launch {
+            // Set by the Start event: from then on the server owns the turn and the answer arrives through sync.
+            var started = false
             c.chat.send(conversationId, text, ids, null, clientId).collect { ev ->
                 live = when (ev) {
                     is ChatEvent.Delta -> live?.copy(answer = (live?.answer ?: "") + ev.text)
@@ -266,11 +268,14 @@ fun ChatScreen(conversationId: String, initial: String? = null) {
                     is ChatEvent.Done -> live?.copy(done = true)
                     is ChatEvent.Error -> {
                         if (ev.code == "offline") {
-                            c.chat.queueMessage(conversationId, text, ids)
+                            // Never reached the server: queue it under the SAME client id so a late delivery of the
+                            // original request cannot produce a second message. Dropped mid-stream: the server keeps
+                            // running the turn; the sync below pulls the stored messages for this conversation.
+                            if (!started) c.chat.queueMessage(conversationId, text, ids, clientMessageId = clientId)
                             null
                         } else live?.copy(error = ev.message, done = true)
                     }
-                    is ChatEvent.Start -> live
+                    is ChatEvent.Start -> { started = true; live }
                 }
             }
             runCatching { c.sync.syncNow() }

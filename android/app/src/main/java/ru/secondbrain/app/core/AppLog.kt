@@ -66,5 +66,11 @@ object AppLog {
 
     fun clearCrashes() = crashes().forEach { it.delete() }
 
+    /** Local wipe (device disconnected): the log file and all crash reports go too. */
+    fun clearAll() {
+        clearCrashes()
+        synchronized(lock) { if (::file.isInitialized) runCatching { file.delete() } }
+    }
+
     private fun stackTrace(e: Throwable): String = StringWriter().also { e.printStackTrace(PrintWriter(it)) }.toString()
 }

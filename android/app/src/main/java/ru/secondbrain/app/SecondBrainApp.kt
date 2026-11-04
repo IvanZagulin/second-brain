@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -27,6 +28,7 @@ import ru.secondbrain.app.data.sync.SyncManager
 import ru.secondbrain.app.health.HealthSync
 import ru.secondbrain.app.notifications.AgentNotifier
 import ru.secondbrain.app.update.UpdateManager
+import java.io.File
 
 class SecondBrainApp : Application() {
     lateinit var container: AppContainer
@@ -52,11 +54,26 @@ class AppContainer(val context: Context) {
     val api = ApiClient(prefs)
     val notifier: AgentNotifier by lazy { AgentNotifier(context, db) }
     val store: RecordStore by lazy { RecordStore(db) { sync.requestSync(4) } }
-    val sync: SyncManager by lazy { SyncManager(context, api, db, prefs, store, notifier) }
+    val sync: SyncManager by lazy { SyncManager(context, api, db, prefs, store, notifier, onRevoked = { wipeLocal() }) }
     val chat: ChatRepository by lazy { ChatRepository(api, db, store, sync) }
     val updates: UpdateManager by lazy { UpdateManager(context, api, prefs) }
 
     @Volatile private var packagesCache: Set<String>? = null
+
+    /**
+     * Removes everything this device holds: all Room tables, captured photos, cached captures, the app log and
+     * crash reports, and all preferences (the database key is kept so the empty database can still be opened).
+     * Used when the owner disconnects the device and when the server reports it revoked.
+     */
+    suspend fun wipeLocal() = withContext(Dispatchers.IO) {
+        runCatching { db.clearAllTables() }.onFailure { AppLog.e("app", "clearAllTables failed", it) }
+        runCatching { File(context.filesDir, "photos").deleteRecursively() }
+        runCatching { File(context.cacheDir, "captures").deleteRecursively() }
+        runCatching { File(context.cacheDir, "updates").deleteRecursively() }
+        packagesCache = null
+        prefs.resetAll()
+        AppLog.clearAll()
+    }
 
     suspend fun allowedPackages(): Set<String> {
         packagesCache?.let { return it }

@@ -62,6 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import ru.secondbrain.app.AppContainer
 import ru.secondbrain.app.data.api.ApiException
@@ -323,6 +324,8 @@ fun <T> rememberLoad(vararg keys: Any?, block: suspend () -> T): Loadable<T> {
         try {
             value = block()
             error = null
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: ApiException) {
             error = e.message
         } catch (e: Exception) {
@@ -343,6 +346,8 @@ fun rememberAction(): (String?, suspend () -> Unit) -> Unit {
             try {
                 block()
                 if (success != null) snackbar.showSnackbar(success)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 snackbar.showSnackbar(e.message ?: "Ошибка")
             }

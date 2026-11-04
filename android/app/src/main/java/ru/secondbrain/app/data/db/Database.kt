@@ -112,6 +112,9 @@ interface RecordDao {
     @Query("UPDATE records SET version = :version, serverSeq = :serverSeq WHERE entity = :entity AND id = :id")
     suspend fun setVersion(entity: String, id: String, version: Int, serverSeq: Long)
 
+    @Query("UPDATE records SET dirty = 0 WHERE entity = :entity AND id = :id")
+    suspend fun clearDirty(entity: String, id: String)
+
     @Query("SELECT COUNT(*) FROM records")
     suspend fun count(): Int
 
@@ -148,8 +151,13 @@ interface PendingMessageDao {
     @Query("SELECT * FROM pending_messages WHERE conversationId = :conversationId ORDER BY createdAt")
     fun observe(conversationId: String): Flow<List<PendingMessageEntity>>
 
-    @Query("SELECT * FROM pending_messages WHERE status != 'sending' ORDER BY createdAt")
+    /** Only 'pending': 'failed' ones wait for a manual retry, 'sending' ones are held by a running sync. */
+    @Query("SELECT * FROM pending_messages WHERE status = 'pending' ORDER BY createdAt")
     suspend fun sendable(): List<PendingMessageEntity>
+
+    /** Messages are 'sending' only while this process holds them; after a crash they would be stuck. */
+    @Query("UPDATE pending_messages SET status = 'pending' WHERE status = 'sending'")
+    suspend fun resetSending()
 
     @Upsert
     suspend fun upsert(item: PendingMessageEntity)

@@ -159,7 +159,7 @@ fun SettingsScreen() {
         onConfirm = {
             scope.launch {
                 runCatching { val me = c.api.get("/api/v1/auth/me").jsonObject; c.api.post("/api/v1/auth/devices/${me["device"]!!.jsonObject.str("id")}/revoke") }
-                c.db.records().clear(); c.db.outbox().clear(); c.prefs.resetAll()
+                c.wipeLocal()
                 (c.context as? SecondBrainApp)?.let { android.os.Process.killProcess(android.os.Process.myPid()) }
             }
         }, onDismiss = { unpair = false })
@@ -402,10 +402,10 @@ fun IntegrationsScreen() {
     val recent by c.db.bankNotifications().recent().collectAsState(initial = emptyList())
     LaunchedEffect(Unit) {
         packages = c.allowedPackages().toList()
-        granted = runCatching { HealthSync.granted(context).size }.getOrDefault(0)
+        granted = runCatching { (HealthSync.granted(context) intersect HealthSync.PERMISSIONS).size }.getOrDefault(0)
     }
     val hcLauncher = rememberLauncherForActivityResult(PermissionController.createRequestPermissionResultContract()) { set ->
-        granted = set.size
+        granted = (set intersect HealthSync.PERMISSIONS).size
         if (set.isNotEmpty()) scope.launch { c.prefs.set(Prefs.Keys.healthEnabled, true) }
     }
     Screen("Интеграции") {
@@ -438,7 +438,7 @@ fun IntegrationsScreen() {
                 } else {
                     Secondary("Разрешено типов данных: $granted из ${HealthSync.PERMISSIONS.size}. Данные часов попадают сюда через Samsung Health.")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { hcLauncher.launch(HealthSync.PERMISSIONS) }) { Text("Выдать доступ") }
+                        Button(onClick = { hcLauncher.launch(HealthSync.permissionsToRequest(context)) }) { Text("Выдать доступ") }
                         OutlinedButton(onClick = { act(null) { val n = HealthSync.syncHealth(context); c.prefs.set(Prefs.Keys.lastHealthSync, System.currentTimeMillis()); AppLog.i("health", "manual $n") } }) { Text("Синхронизировать") }
                     }
                     SwitchRow("Синхронизировать каждые 6 часов", checked = healthEnabled == true) { on -> scope.launch { c.prefs.set(Prefs.Keys.healthEnabled, on) } }

@@ -24,7 +24,7 @@ from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 
 from app.core.config import get_settings
 from app.core.db import session_scope
-from app.core.errors import ApiError, LlmUnavailable
+from app.core.errors import ApiError, LlmBadRequest, LlmTruncated, LlmUnavailable
 from app.services.llm import budget
 from app.services.llm.pricing import FALLBACK_MODELS, MODERN_MODELS, estimate_tokens, estimate_usd
 from app.services.settings import get_all_settings
@@ -127,17 +127,24 @@ async def call(owner_id: uuid.UUID, purpose: str, *, system: str | list, message
     reservation = await budget.reserve(owner_id, purpose, est, priority)
     params = build_params(model=model, effort=effort, system=system, messages=messages,
                           max_tokens=max_tokens, tools=tools, json_schema=json_schema, cache=cache)
+    stream = None
     try:
         async with get_client().beta.messages.stream(**params) as stream:
             message = await stream.get_final_message()
     except anthropic.APIStatusError as exc:
+        # Rejected before anything streamed: nothing was billed. Rate limits and overload are worth a retry.
         await budget.settle(owner_id, reservation, model=model, purpose=purpose, ok=False, job_id=job_id,
                             conversation_id=conversation_id, meta={"error": exc.status_code})
         log.warning("claude api error %s on %s", exc.status_code, purpose)
-        raise LlmUnavailable(f"Claude API вернул ошибку {exc.status_code}") from exc
-    except (anthropic.APIConnectionError, anthropic.APITimeoutError) as exc:
+        if exc.status_code in (408, 409, 429, 500, 502, 503, 504, 529):
+            raise LlmUnavailable(f"Claude API вернул ошибку {exc.status_code}") from exc
+        raise LlmBadRequest(f"Claude API отклонил запрос ({exc.status_code})") from exc
+    except (anthropic.APIConnectionError, anthropic.APITimeoutError, ValueError) as exc:
+        # Unknown outcome: the request may have run to the end on the server side. Book what the partial
+        # snapshot shows, else the reservation, so a dropped connection never under-counts the month.
         await budget.settle(owner_id, reservation, model=model, purpose=purpose, ok=False, job_id=job_id,
-                            conversation_id=conversation_id, meta={"error": "connection"})
+                            conversation_id=conversation_id, usage=partial_usage(stream), fallback_cost=est,
+                            meta={"error": "connection" if not isinstance(exc, ValueError) else "stream_parse"})
         raise LlmUnavailable("Нет связи с Claude API") from exc
 
     cost = await budget.settle(owner_id, reservation, model=model, purpose=purpose, usage=message.usage,
@@ -146,6 +153,8 @@ async def call(owner_id: uuid.UUID, purpose: str, *, system: str | list, message
     _, totals = budget.usage_cost(model, message.usage)
     if message.stop_reason == "refusal":
         raise LlmRefusal("Модель отказалась выполнять запрос")
+    if message.stop_reason == "max_tokens" and json_schema is not None:
+        raise LlmTruncated(f"Структурированный ответ обрезан по лимиту {max_tokens} токенов")
     text = "".join(b.text for b in message.content if b.type == "text")
     result = LlmResult(text=text, model=message.model or model, stop_reason=message.stop_reason, cost_usd=cost,
                        usage=totals, content=[b.model_dump(exclude_none=True) for b in message.content])
@@ -157,8 +166,23 @@ async def call(owner_id: uuid.UUID, purpose: str, *, system: str | list, message
     return result
 
 
+def partial_usage(stream: Any) -> Any | None:
+    """Usage accumulated so far by a stream that did not finish cleanly (None if nothing arrived)."""
+    try:
+        snapshot = stream.current_message_snapshot if stream is not None else None
+    except Exception:
+        return None
+    usage = getattr(snapshot, "usage", None)
+    if usage is None or not (getattr(usage, "input_tokens", 0) or getattr(usage, "output_tokens", 0)):
+        return None
+    return usage
+
+
 async def call_json(owner_id: uuid.UUID, purpose: str, *, system: str, user: str | list, schema: dict,
                     **kw) -> Any:
+    # One-shot structured requests (a receipt photo, an extraction prompt) are never repeated within the
+    # cache TTL: a cache write would cost 1.25x input for nothing. Callers that do repeat pass cache=True.
+    kw.setdefault("cache", False)
     content = user if isinstance(user, list) else [{"type": "text", "text": user}]
     result = await call(owner_id, purpose, system=system, messages=[{"role": "user", "content": content}],
                         json_schema=schema, **kw)

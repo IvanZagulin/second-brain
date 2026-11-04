@@ -24,14 +24,19 @@ log = logging.getLogger("api")
 async def lifespan(_: FastAPI):
     s = get_settings()
     setup_logging(s.log_level)
+    if s.environment == "production" and (s.secret_key.startswith("change-me") or len(s.secret_key) < 32):
+        # The pepper for every device-token hash: with the example value the HMACs protect nothing.
+        raise RuntimeError("SECRET_KEY is the example value or shorter than 32 characters; set it in deploy/.env")
     s.uploads_dir.mkdir(parents=True, exist_ok=True)
     s.imports_dir.mkdir(parents=True, exist_ok=True)
     log.info("api started", extra={"extra_fields": {"version": APP_VERSION}})
     yield
 
 
+_dev = get_settings().environment != "production"  # the API surface is not public documentation
 app = FastAPI(title="Second Brain API", version=APP_VERSION, default_response_class=ORJSONResponse,
-              lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
+              lifespan=lifespan, docs_url="/api/docs" if _dev else None,
+              openapi_url="/api/openapi.json" if _dev else None, redoc_url=None)
 
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_error_handler)

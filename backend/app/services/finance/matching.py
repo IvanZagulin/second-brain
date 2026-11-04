@@ -358,6 +358,19 @@ async def decide_match(db: AsyncSession, owner_id: uuid.UUID, match_id: uuid.UUI
                 mcc=pending.mcc, balance_after=pending.balance_after_minor, card_last4=pending.card_last4,
                 account_id=pending.account_id)
         pending.deleted_at, pending.status = utcnow(), "excluded"
+        # The pending row already ran the pairing passes: undo its cash mirror / transfer leg and let the
+        # surviving transaction pair instead, otherwise the cash balance keeps a phantom move.
+        if pending.counterpart_id:
+            other = await db.get(Transaction, pending.counterpart_id)
+            if other is not None and other.counterpart_id == pending.id:
+                if other.origin == "agent" and (other.description or "").startswith("Автоматически"):
+                    other.deleted_at, other.status = utcnow(), "excluded"
+                else:
+                    other.counterpart_id = None
+            pending.counterpart_id = None
+        if target.counterpart_id is None:
+            await _pair_internal(db, target)
+            await _cash_counterpart(db, target)
         for s in siblings:
             s.status, s.decided_at = "rejected", utcnow()
     elif pending and not siblings:
