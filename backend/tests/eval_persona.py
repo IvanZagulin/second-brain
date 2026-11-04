@@ -27,8 +27,9 @@ from agent.tools import tool_definitions  # noqa: E402
 from app.services.llm.client import build_params  # noqa: E402
 
 CASES = Path(__file__).parent / "evals" / "persona_cases.json"
+# No finance line in the context: with the numbers already there the model answers from them (rightly), and
+# the finance case would stop testing tool routing.
 CONTEXT = ("<context>\nСейчас: среда, 4 ноября 2026, 19:10 (Europe/Moscow). Фаза дня: вечер.\nРежим: auto (выбери сам).\n"
-           "Финансы: свободно 12 400 ₽, бюджет на сегодня 620 ₽, осталось на сегодня 180 ₽, до поступления 16 дн.\n"
            "Тренировки: программа — вт: Спина/бицепс/плечи, чт: Грудь/трицепс/ноги. Последняя записанная тренировка: 28.10.\n"
            "</context>")
 
