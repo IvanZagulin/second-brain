@@ -804,6 +804,32 @@ async def _nutrition_overview(ctx: ToolCtx, a: NutritionDaysIn) -> dict:
     return await nutrition_overview(ctx.db, ctx.owner_id, a.days, ctx.tz_name)
 
 
+class PatternsIn(BaseModel):
+    weeks: int = Field(8, ge=2, le=26)
+
+
+@tool("find_patterns", "Закономерности в поведении, посчитанные кодом за N недель: дорогой день недели, вечерние "
+      "траты, деньги против настроения, сон против тренировок и настроения, выполненные обещания. С цифрами и "
+      "размерами выборок; пусто — значит, данных мало или связи нет.", PatternsIn, domain="memory")
+async def _find_patterns(ctx: ToolCtx, a: PatternsIn) -> dict:
+    from agent.patterns import find_patterns
+    found = await find_patterns(ctx.db, ctx.owner_id, a.weeks, ctx.tz_name)
+    return {"weeks": a.weeks, "patterns": found,
+            "note": "Это статистика, а не причинность; формулируй как наблюдение с цифрами."}
+
+
+class DebtScenariosIn(BaseModel):
+    monthly_rub: float | None = Field(None, gt=0, description="Сколько владелец готов платить в месяц; пусто — "
+                                                              "несколько вариантов")
+
+
+@tool("debt_scenarios", "Сценарии погашения долгов: при платеже X в месяц — когда закроются и какая переплата, по "
+      "условиям из карточек долгов (каникулы учитываются).", DebtScenariosIn, domain="finance")
+async def _debt_scenarios(ctx: ToolCtx, a: DebtScenariosIn) -> dict:
+    from agent.debts import scenarios
+    return await scenarios(ctx.db, ctx.owner_id, local_now(ctx.tz_name).date(), a.monthly_rub)
+
+
 class SearchNotesIn(BaseModel):
     query: str | None = Field(None, description="Слова для поиска; пусто — последние заметки")
     limit: int = Field(10, ge=1, le=30)
@@ -1191,4 +1217,4 @@ async def _message_user(ctx: ToolCtx, a: MessageUserIn) -> dict:
 
 DEFAULT_JOB_TOOLS = ["search_memory", "finance_summary", "list_transactions", "workout_overview", "list_tasks",
                      "create_task", "schedule_followup", "message_user", "body_metrics", "list_obligations",
-                     "health_overview", "list_habits"]
+                     "health_overview", "list_habits", "debt_scenarios"]

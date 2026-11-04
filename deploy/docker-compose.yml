@@ -79,9 +79,11 @@ services:
       dockerfile: deploy/Dockerfile
     command: >
       sh -c "alembic -c database/alembic.ini upgrade head && python -m app.cli init &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'
+             --timeout-graceful-shutdown 75"
     ports:
       - "127.0.0.1:8040:8000"
+    stop_grace_period: 90s  # running chat turns finish before the container is killed
     mem_limit: 450m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/health')"]

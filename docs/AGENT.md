@@ -54,6 +54,18 @@ broken streaks; nutrition totals from `meals`; and the owner's ratings of the ag
 before a training day, a streak of 7+ days broken yesterday) and the initiative prompt (recent ratings, with an
 explicit "write less" conclusion when "noise" dominates).
 
+`agent/patterns.py` finds behaviour patterns deterministically over the last weeks (spending by weekday and
+hour, money against mood, sleep against training and mood, promises kept) and reports each with its numbers and
+sample sizes; the weekly report and the `find_patterns` tool use it. `agent/debts.py` simulates payoff scenarios
+(avalanche, interest after the holiday) for the `debt_scenarios` tool and the rule that proposes a plan 60 and 30
+days before a holiday ends. `agent/memory_care.py` runs nightly: working memories older than 30 days become
+non-actual, near-duplicates by embedding (cosine ≥ 0.92, same type) are merged into the older record, close but
+different permanent facts are judged by Haiku and a contradiction becomes a clarifying question; the monthly
+`profile_diff` job tells the owner what changed in the portrait (`profile_history` keeps 12 versions).
+
+`backend/tests/eval_persona.py` is a live eval of the persona and tool routing (12 cases in
+`tests/evals/persona_cases.json`); it costs money and is run by hand, not in CI.
+
 ## Permissions and the journal
 
 Each tool has a level (A automatic, B automatic + notification + rollback, C confirmation) — see

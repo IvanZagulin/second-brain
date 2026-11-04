@@ -11,6 +11,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from agent.debts import scenarios as debt_scenarios, scenarios_text
 from agent.initiative import consider
 from agent.insights import SHORT_SLEEP_MIN, fmt_minutes, habits_status, last_night_sleep
 from app.core.db import session_scope
@@ -151,7 +152,8 @@ async def daily_checks(owner_id: uuid.UUID) -> dict[str, int]:
                 priority="high" if days == 0 else "normal", dedupe_key=f"due:{o.kind}:{o.ref_id}:{o.due}:{days}")
             sent["payments"] += int(n is not None)
 
-        # Credit holidays ending soon.
+        # Credit holidays ending soon: a reminder at 30/14/3 days, and a payoff plan at 60 and 30.
+        holiday_plan = None
         for d in (await db.execute(select(Debt).where(Debt.owner_id == owner_id, Debt.deleted_at.is_(None),
                                                       Debt.holiday_until.is_not(None), Debt.status != "closed"))).scalars():
             left = (d.holiday_until - today).days
@@ -160,6 +162,8 @@ async def daily_checks(owner_id: uuid.UUID) -> dict[str, int]:
                                           body=f"{d.creditor}: каникулы до {d.holiday_until:%d.%m.%Y} (через {left} дн.). "
                                                f"Остаток {fmt_rub(d.balance_minor)}. Проверь условия и график платежей.",
                                           category="finance", priority="high", dedupe_key=f"holiday:{d.id}:{left}")
+            if left in (60, 30) and holiday_plan is None:
+                holiday_plan = (d, left, scenarios_text(await debt_scenarios(db, owner_id, today)))
 
         # Subscription dates roll forward once passed.
         for s in (await db.execute(select(Subscription).where(Subscription.owner_id == owner_id,
@@ -210,6 +214,14 @@ async def daily_checks(owner_id: uuid.UUID) -> dict[str, int]:
             if sleep is not None and sleep < SHORT_SLEEP_MIN:
                 short_sleep = sleep
 
+    if holiday_plan is not None:
+        d, left, plan = holiday_plan
+        r = await consider(owner_id, f"Через {left} дн. заканчиваются кредитные каникулы у {d.creditor}",
+                           f"Сценарии погашения (посчитаны кодом):\n{plan}\n"
+                           "Предложи план: сколько откладывать в месяц с сегодняшнего дня, чтобы к концу каникул был "
+                           "запас на первые платежи, и какой долг гасить первым. Спроси, какой вариант он берёт.",
+                           priority=2, dedupe_key=f"holiday_plan:{d.id}:{left}")
+        sent["holiday_plan"] = int(r.get("sent", False))
     for h in broken[:2]:
         r = await consider(owner_id, f"Сорвана серия привычки «{h['name']}»: {h['broken_streak_days']} дней подряд, вчера отметки нет",
                            "Спроси, что случилось, без морали, и предложи продолжить сегодня. Если это привычка-отказ "

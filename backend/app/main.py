@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -31,6 +32,12 @@ async def lifespan(_: FastAPI):
     s.imports_dir.mkdir(parents=True, exist_ok=True)
     log.info("api started", extra={"extra_fields": {"version": APP_VERSION}})
     yield
+    # A deploy must not cut a chat turn in half: give running turns a minute to finish and store their answer
+    # (docker-compose stop_grace_period and uvicorn's graceful timeout are set to match).
+    from app.routers.chat import _running
+    if _running:
+        log.info("waiting for %d chat turns before shutdown", len(_running))
+        await asyncio.wait(list(_running), timeout=60)
 
 
 _dev = get_settings().environment != "production"  # the API surface is not public documentation

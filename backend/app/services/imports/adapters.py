@@ -116,12 +116,26 @@ def detect(path: Path) -> str:
     raise UnknownFormat("Не удалось определить формат файла")
 
 
+MAX_MEMBER_BYTES = 2 * 1024 ** 3   # one export file; bigger than any real chat history
+MAX_ZIP_RATIO = 200                 # compressed → uncompressed; a zip bomb is in the thousands
+
+
+def check_member(info: zipfile.ZipInfo) -> None:
+    """Refuse archive members that would expand far beyond their compressed size or past the size cap."""
+    if info.file_size > MAX_MEMBER_BYTES:
+        raise UnknownFormat(f"Файл {info.filename} в архиве больше 2 ГБ")
+    if info.compress_size and info.file_size / info.compress_size > MAX_ZIP_RATIO:
+        raise UnknownFormat(f"Файл {info.filename} в архиве сжат подозрительно сильно")
+
+
 def open_member(path: Path, suffix: str) -> IO[bytes]:
     if zipfile.is_zipfile(path):
         zf = zipfile.ZipFile(path)
         member = next((n for n in zf.namelist() if n.lower().endswith(suffix)), None)
         if member is None:
+            zf.close()
             raise UnknownFormat(f"В архиве нет {suffix}")
+        check_member(zf.getinfo(member))
         return zf.open(member)
     return path.open("rb")
 
@@ -387,6 +401,8 @@ def telegram_html_chats(path: Path) -> Iterator[ParsedChat]:
     Authors carry no ids in HTML, so participants are keyed by name; the owner picks which name is theirs."""
     zf = zipfile.ZipFile(path)
     pages = sorted((n for n in zf.namelist() if re.search(r"(^|/)messages\d*\.html$", n)), key=_page_no)
+    for n in pages:
+        check_member(zf.getinfo(n))
     if not pages:
         raise UnknownFormat("В архиве нет messages.html")
     first = _tg_html_page(zf, pages[0], None)
@@ -427,6 +443,7 @@ def claude_memory_chats(path: Path) -> Iterator[ParsedChat]:
             name = _zip_name(info)
             if not (name.startswith("memories/") and name.endswith(".json")):
                 continue
+            check_member(info)
             data = json.loads(zf.read(info).decode("utf-8", errors="replace"))
             when = datetime(*info.date_time, tzinfo=timezone.utc)
 

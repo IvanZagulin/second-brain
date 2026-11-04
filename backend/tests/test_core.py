@@ -374,3 +374,31 @@ def test_statement_fingerprint_uses_bank_op_id_across_formats():
     _fingerprints("sber", "40817", a)
     _fingerprints("sber", "40817", b)
     assert a[0].fingerprint == b[0].fingerprint
+
+
+def test_debt_payoff_simulation():
+    from agent.debts import DebtTerms, monthly_rate, simulate
+
+    assert monthly_rate(12, "year") == pytest.approx(0.01)
+    assert monthly_rate(1, "day") == pytest.approx(0.30)
+    assert monthly_rate(2, "month") == pytest.approx(0.02)
+    zero = [DebtTerms("a", "МФО", 5_000_000, 0.0, 0, None, True)]
+    sim = simulate(zero, 1_000_000, date(2026, 11, 4))
+    assert sim["months"] == 5 and sim["interest_total_minor"] == 0 and sim["cleared_by"] == "2027-04-01"
+    # Interest-free while the holiday lasts, then 10 % a month: paying only 1 000 ₽ never clears it.
+    hot = [DebtTerms("b", "Займер", 5_000_000, 0.10, 0, date(2026, 12, 31), True)]
+    assert simulate(hot, 100_000, date(2026, 11, 4))["months"] is None
+    sim = simulate(hot, 2_000_000, date(2026, 11, 4))
+    assert sim["months"] is not None and sim["interest_total_minor"] > 0
+    # Two debts: the budget goes to the expensive one first.
+    pair = [DebtTerms("cheap", "Банк", 3_000_000, 0.01, 100_000, None, True),
+            DebtTerms("dear", "МФО", 2_000_000, 0.08, 100_000, None, True)]
+    sim = simulate(pair, 1_500_000, date(2026, 11, 4))
+    assert sim["closes"]["dear"] < sim["closes"]["cheap"]
+
+
+def test_patterns_ratio_guard():
+    from agent.patterns import _ratio
+
+    assert _ratio(130, 100) == pytest.approx(1.3)
+    assert _ratio(0, 0) == 1.0 and _ratio(5, 0) == float("inf")

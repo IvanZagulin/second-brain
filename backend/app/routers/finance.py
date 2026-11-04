@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import date, datetime, timedelta
 
@@ -20,6 +21,7 @@ from app.models import (
 from app.services.audit import audit
 from app.services.crud import crud_router, serialize
 from app.services.finance import engine
+from app.services.finance.categorize import forget_rules
 from app.services.finance.matching import decide_match, ingest_notification, ingest_statement, review_queue
 from app.services.finance.receipts import receipt_from_attachment, receipt_from_qr
 from app.services.finance.recurring import detect_subscriptions, refresh_tax_calendar
@@ -101,7 +103,8 @@ async def statements(file: UploadFile = File(...), account_id: uuid.UUID | None 
     if len(raw) > 30 * 1024 * 1024:
         raise ApiError("Файл больше 30 МБ", code="too_large")
     try:
-        data = parse_statement(file.filename or "statement", raw, auth.user.timezone, bank)
+        # pdfplumber/openpyxl are CPU-bound: keep the event loop free for the other requests meanwhile.
+        data = await asyncio.to_thread(parse_statement, file.filename or "statement", raw, auth.user.timezone, bank)
     except UnsupportedStatement as exc:
         raise ApiError(str(exc), code="unsupported_statement") from exc
     report = await ingest_statement(db, auth.owner_id, data, account_id=account_id, import_job_id=None)
@@ -153,6 +156,7 @@ async def rules(auth: Auth = Depends(get_auth), db: AsyncSession = Depends(get_d
 
 @router.post("/rules", status_code=201)
 async def add_rule(body: RuleIn, auth: Auth = Depends(get_auth), db: AsyncSession = Depends(get_db)):
+    forget_rules(auth.owner_id)
     r = CategoryRule(owner_id=auth.owner_id, origin="user", priority=20, **body.model_dump())
     db.add(r)
     await db.flush()

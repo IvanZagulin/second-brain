@@ -124,32 +124,12 @@ async def call(owner_id: uuid.UUID, purpose: str, *, system: str | list, message
     ``cache=False`` for one-off prompts (archive periods): a cache write costs 1.25x input and is never read."""
     model, effort = await resolve_route(owner_id, purpose, model, effort)
     est = estimate_usd(model, estimate_request_tokens(system, messages, tools), max_tokens)
-    reservation = await budget.reserve(owner_id, purpose, est, priority)
     params = build_params(model=model, effort=effort, system=system, messages=messages,
                           max_tokens=max_tokens, tools=tools, json_schema=json_schema, cache=cache)
-    stream = None
-    try:
-        async with get_client().beta.messages.stream(**params) as stream:
-            message = await stream.get_final_message()
-    except anthropic.APIStatusError as exc:
-        # Rejected before anything streamed: nothing was billed. Rate limits and overload are worth a retry.
-        await budget.settle(owner_id, reservation, model=model, purpose=purpose, ok=False, job_id=job_id,
-                            conversation_id=conversation_id, meta={"error": exc.status_code})
-        log.warning("claude api error %s on %s", exc.status_code, purpose)
-        if exc.status_code in (408, 409, 429, 500, 502, 503, 504, 529):
-            raise LlmUnavailable(f"Claude API вернул ошибку {exc.status_code}") from exc
-        raise LlmBadRequest(f"Claude API отклонил запрос ({exc.status_code})") from exc
-    except (anthropic.APIConnectionError, anthropic.APITimeoutError, ValueError) as exc:
-        # Unknown outcome: the request may have run to the end on the server side. Book what the partial
-        # snapshot shows, else the reservation, so a dropped connection never under-counts the month.
-        await budget.settle(owner_id, reservation, model=model, purpose=purpose, ok=False, job_id=job_id,
-                            conversation_id=conversation_id, usage=partial_usage(stream), fallback_cost=est,
-                            meta={"error": "connection" if not isinstance(exc, ValueError) else "stream_parse"})
-        raise LlmUnavailable("Нет связи с Claude API") from exc
-
-    cost = await budget.settle(owner_id, reservation, model=model, purpose=purpose, usage=message.usage,
-                               job_id=job_id, conversation_id=conversation_id,
-                               request_id=getattr(message, "_request_id", None), meta=meta)
+    async with MeteredStream(owner_id, purpose, model=model, params=params, est=est, priority=priority,
+                             job_id=job_id, conversation_id=conversation_id, meta=meta) as ms:
+        message = await ms.finish()
+    cost = ms.cost
     _, totals = budget.usage_cost(model, message.usage)
     if message.stop_reason == "refusal":
         raise LlmRefusal("Модель отказалась выполнять запрос")
@@ -164,6 +144,97 @@ async def call(owner_id: uuid.UUID, purpose: str, *, system: str | list, message
         except json.JSONDecodeError as exc:
             raise LlmUnavailable("Модель вернула некорректный JSON") from exc
     return result
+
+
+class LlmStreamParse(LlmUnavailable):
+    """The SDK could not parse what the model streamed (a broken tool-input JSON): billed, retryable once."""
+    code = "stream_parse"
+
+
+RETRYABLE_STATUS = (408, 409, 429, 500, 502, 503, 504, 529)
+
+
+def translate_error(exc: BaseException) -> BaseException:
+    """The API's failure modes as this app's error classes (unknown ones pass through unchanged)."""
+    if isinstance(exc, anthropic.APIStatusError):
+        if exc.status_code in RETRYABLE_STATUS:
+            return LlmUnavailable(f"Claude API вернул ошибку {exc.status_code}")
+        return LlmBadRequest(f"Claude API отклонил запрос ({exc.status_code})")
+    if isinstance(exc, (anthropic.APIConnectionError, anthropic.APITimeoutError)):
+        return LlmUnavailable("Нет связи с Claude API")
+    if isinstance(exc, ValueError):
+        return LlmStreamParse("Модель сформировала некорректный вызов инструмента")
+    return exc
+
+
+class MeteredStream:
+    """Reserve the worst case → open the stream → settle what really happened, in one place for every
+    caller (the chat loop iterates ``ms.stream`` itself; ``call`` just waits for the final message).
+
+    Failure policy: a status error before anything streamed is free (and 4xx other than rate limits is not
+    retried); a dropped connection or an unparsable stream books the partial usage, else the reservation,
+    because the tokens were produced. Exceptions come out translated (see ``translate_error``)."""
+
+    def __init__(self, owner_id: uuid.UUID, purpose: str, *, model: str, params: dict[str, Any], est: Decimal,
+                 priority: int = 1, job_id: uuid.UUID | None = None, conversation_id: uuid.UUID | None = None,
+                 meta: dict | None = None):
+        self.owner_id, self.purpose, self.model, self.params, self.est = owner_id, purpose, model, params, est
+        self.priority, self.job_id, self.conversation_id, self.meta = priority, job_id, conversation_id, meta
+        self.reservation: uuid.UUID | None = None
+        self.stream: Any = None
+        self.message: Any = None
+        self.cost = Decimal(0)
+        self._cm: Any = None
+
+    async def __aenter__(self) -> "MeteredStream":
+        self.reservation = await budget.reserve(self.owner_id, self.purpose, self.est, self.priority)
+        self._cm = get_client().beta.messages.stream(**self.params)
+        try:
+            self.stream = await self._cm.__aenter__()
+        except BaseException as exc:
+            self._cm = None
+            await self._settle_failure(exc)
+            raise translate_error(exc) from exc
+        return self
+
+    async def finish(self) -> Any:
+        self.message = await self.stream.get_final_message()
+        return self.message
+
+    async def __aexit__(self, et, exc, tb) -> bool:
+        if self._cm is not None:
+            try:
+                await self._cm.__aexit__(et, exc, tb)
+            except Exception:
+                pass
+        if exc is None:
+            if self.message is None:
+                self.message = await self.stream.get_final_message()
+            self.cost = await budget.settle(self.owner_id, self.reservation, model=self.model, purpose=self.purpose,
+                                            usage=self.message.usage, job_id=self.job_id,
+                                            conversation_id=self.conversation_id,
+                                            request_id=getattr(self.message, "_request_id", None), meta=self.meta)
+            return False
+        await self._settle_failure(exc)
+        translated = translate_error(exc)
+        if translated is exc:
+            return False
+        raise translated from exc
+
+    async def _settle_failure(self, exc: BaseException) -> None:
+        common = dict(model=self.model, purpose=self.purpose, ok=False, job_id=self.job_id,
+                      conversation_id=self.conversation_id)
+        if isinstance(exc, anthropic.APIStatusError):
+            log.warning("claude api error %s on %s", exc.status_code, self.purpose)
+            await budget.settle(self.owner_id, self.reservation, meta={"error": exc.status_code}, **common)
+            return
+        # Unknown outcome (dropped connection, broken stream, cancellation): the tokens produced so far were
+        # billed; book the snapshot, else the reservation.
+        kind = ("stream_parse" if isinstance(exc, ValueError)
+                else "connection" if isinstance(exc, (anthropic.APIConnectionError, anthropic.APITimeoutError))
+                else type(exc).__name__)
+        await budget.settle(self.owner_id, self.reservation, usage=partial_usage(self.stream), fallback_cost=self.est,
+                            meta={"error": kind}, **common)
 
 
 def partial_usage(stream: Any) -> Any | None:

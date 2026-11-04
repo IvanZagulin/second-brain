@@ -9,6 +9,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from agent import jobs, reports, rules
 from app.core.config import get_settings
@@ -93,8 +94,11 @@ async def embed_memories(ctx: dict) -> int:
         if vectors is None:
             break
         async with session_scope() as db:
-            for r, vec in zip(rows, vectors):
-                db.add(MemoryEmbedding(memory_id=r.id, owner_id=r.owner_id, model=MODEL_NAME, embedding=vec))
+            # Two runs can overlap (the 10-minute tick and the write-triggered job): the loser's rows are skipped.
+            stmt = pg_insert(MemoryEmbedding).values([
+                {"memory_id": r.id, "owner_id": r.owner_id, "model": MODEL_NAME, "embedding": vec}
+                for r, vec in zip(rows, vectors)]).on_conflict_do_nothing(index_elements=["memory_id"])
+            await db.execute(stmt)
         total += len(rows)
     return total
 

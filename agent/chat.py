@@ -14,7 +14,6 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-import anthropic
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,13 +22,13 @@ from agent.context import build_context
 from agent.persona import build_system_prompt, crisis_signal
 from agent.tools import REGISTRY, ToolCtx, execute, tool_definitions
 from app.core.db import session_scope
-from app.core.errors import ApiError, BudgetExceeded, NotFound
+from app.core.errors import ApiError, BudgetExceeded, LlmBadRequest, LlmUnavailable, NotFound
 from app.core.timeutil import utcnow
 from app.models import AgentJob, AgentProfile, Attachment, Conversation, Message, User
 from app.services.crud import serialize
 from app.services.llm import budget
 from app.services.llm.client import (
-    build_params, call, estimate_request_tokens, get_client, partial_usage, resolve_route,
+    LlmStreamParse, MeteredStream, build_params, call, estimate_request_tokens, resolve_route,
 )
 from app.services.llm.pricing import estimate_usd
 from app.services.settings import get_setting
@@ -258,17 +257,12 @@ async def _model_loop(owner_id: uuid.UUID, conversation_id: uuid.UUID, system: s
     while rounds < MAX_TOOL_ROUNDS:
         rounds += 1
         est = estimate_usd(model, estimate_request_tokens(system, messages, tools), CHAT_MAX_TOKENS)
-        try:
-            reservation = await budget.reserve(owner_id, purpose, est, priority=2)
-        except BudgetExceeded as exc:
-            yield {"type": "error", "code": exc.code, "message": exc.message}
-            return
         params = build_params(model=model, effort=effort, system=system, messages=messages,
                               max_tokens=CHAT_MAX_TOKENS, tools=tools)
-        stream = None
         try:
-            async with get_client().beta.messages.stream(**params) as stream:
-                async for event in stream:
+            async with MeteredStream(owner_id, purpose, model=model, params=params, est=est, priority=2,
+                                     conversation_id=conversation_id) as ms:
+                async for event in ms.stream:
                     etype = getattr(event, "type", None)
                     if etype == "text":
                         yield {"type": "delta", "text": event.text}
@@ -276,36 +270,24 @@ async def _model_loop(owner_id: uuid.UUID, conversation_id: uuid.UUID, system: s
                         name = event.content_block.name
                         yield {"type": "tool", "name": name, "status": "running",
                                "domain": REGISTRY[name].domain if name in REGISTRY else None}
-                message = await stream.get_final_message()
+                message = await ms.finish()
             json_retries = 0
-        except ValueError:
-            # The model's tool input didn't parse: the tokens were still generated and billed.
-            await budget.settle(owner_id, reservation, model=model, purpose=purpose, ok=False,
-                                conversation_id=conversation_id, usage=partial_usage(stream), fallback_cost=est,
-                                meta={"error": "tool_json"})
+        except BudgetExceeded as exc:
+            yield {"type": "error", "code": exc.code, "message": exc.message}
+            return
+        except LlmStreamParse:
+            # The model's tool input didn't parse: the tokens are booked by the stream; try the round again.
             json_retries += 1
             if json_retries > 2:
                 yield {"type": "error", "code": "tool_json", "message": "Модель сформировала некорректный вызов инструмента"}
                 return
             rounds -= 1
             continue
-        except anthropic.APIStatusError as exc:
-            await budget.settle(owner_id, reservation, model=model, purpose=purpose, ok=False,
-                                conversation_id=conversation_id, meta={"error": exc.status_code})
-            log.warning("chat api error %s", exc.status_code)
-            yield {"type": "error", "code": "llm_error", "message": f"Claude API: ошибка {exc.status_code}"}
-            return
-        except (anthropic.APIConnectionError, anthropic.APITimeoutError):
-            # Unknown outcome (the stream may have dropped after most of the answer): book what the partial
-            # snapshot shows, else the reservation, so the month never under-counts.
-            await budget.settle(owner_id, reservation, model=model, purpose=purpose, ok=False,
-                                conversation_id=conversation_id, usage=partial_usage(stream), fallback_cost=est,
-                                meta={"error": "connection"})
-            yield {"type": "error", "code": "llm_unavailable", "message": "Нет связи с Claude API"}
+        except (LlmUnavailable, LlmBadRequest) as exc:
+            yield {"type": "error", "code": exc.code, "message": exc.message}
             return
 
-        cost = await budget.settle(owner_id, reservation, model=model, purpose=purpose, usage=message.usage,
-                                   conversation_id=conversation_id, request_id=getattr(message, "_request_id", None))
+        cost = ms.cost
         total_cost += float(cost)
         _, totals = budget.usage_cost(model, message.usage)
         blocks = [b.model_dump(exclude_none=True) for b in message.content]

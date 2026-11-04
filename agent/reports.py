@@ -17,6 +17,7 @@ from agent.initiative import consider, deliver_message
 from agent.insights import (
     SHORT_SLEEP_MIN, fmt_minutes, habits_line, habits_status, habits_week, health_overview, last_night_sleep,
 )
+from agent.patterns import find_patterns, patterns_text
 from app.core.db import session_scope
 from app.core.money import fmt_rub
 from app.core.timeutil import RU_WEEKDAYS, brief_key, day_part, local_day_bounds, local_now, parse_hhmm, tz, utcnow
@@ -119,6 +120,11 @@ async def weekly_report(owner_id: uuid.UUID) -> dict[str, Any]:
                                          .limit(30))).scalars().all()
         health = await health_overview(db, owner_id, 7, tz_name)
         habits = await habits_week(db, owner_id, start, today)
+        try:
+            patterns = await find_patterns(db, owner_id, 8, tz_name)
+        except Exception:
+            log.exception("patterns failed")
+            patterns = []
         system = await system_prompt(db, owner_id)
     top = ", ".join(f"{names.get(k, 'без категории')} {fmt_rub(v)}" for k, v in list(cur["by_category"].items())[:6])
     health_s = "нет данных с часов"
@@ -140,11 +146,12 @@ async def weekly_report(owner_id: uuid.UUID) -> dict[str, Any]:
         f"Привычки (сделано/нужно): {habits_s}.\n"
         f"Задачи: выполнено {done}, просрочено {len(overdue)} ({'; '.join(t.title for t in overdue[:5])}).\n"
         f"Настроение: {', '.join(str(m.score) for m in moods) or 'не записывалось'}.\n"
+        f"Закономерности за 8 недель (посчитаны кодом, цифры точные):\n{patterns_text(patterns)}\n"
         f"Новые наблюдения за неделю:\n" + "\n".join(f"- {m.content}" for m in observations[:20])
     )
     prompt = (f"{facts}\n\nСделай недельный отчёт для владельца: деньги, тренировки, сон и привычки, задачи и обещания, "
-              "состояние. Найди 1–3 закономерности (например, связь трат с настроением, сна с тренировками, срывов с днями недели) "
-              "и сформулируй как гипотезы с основаниями. В конце — 2–3 конкретных действия на следующую неделю. "
+              "состояние. Закономерности бери из посчитанных (не выдумывай своих по 5 строкам), объясни, что они значат "
+              "для него; если их нет — так и скажи. В конце — 2–3 конкретных действия на следующую неделю. "
               "До 250 слов, в своей манере.")
     result = await call(owner_id, "analysis", system=system, messages=[{"role": "user", "content": prompt}],
                         max_tokens=6000, priority=2)
@@ -289,6 +296,8 @@ async def refresh_profile_summary(owner_id: uuid.UUID) -> dict[str, Any]:
                                    f"Без выдумок.\n\nФакты:\n{text}"}], max_tokens=2000)
     async with session_scope() as db:
         await set_setting(db, owner_id, "profile_summary", result.text.strip(), merge=False)
+        from agent.memory_care import remember_profile_version
+        await remember_profile_version(db, owner_id, result.text.strip())
     return {"ok": True}
 
 

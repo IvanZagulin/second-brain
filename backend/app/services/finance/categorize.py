@@ -4,10 +4,11 @@ background) Claude Haiku for the rest. Corrections become rules and are applied 
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import BudgetCategory, CategoryRule, Transaction
@@ -134,13 +135,34 @@ def hint_category(merchant: str | None, description: str | None, mcc: str | None
     return None
 
 
+_RULES_TTL = 60.0
+_rules_cache: dict[uuid.UUID, tuple[float, list[CategoryRule]]] = {}
+
+
+async def _rules_for(db: AsyncSession, owner_id: uuid.UUID) -> list[CategoryRule]:
+    """Rules change rarely and a 2 000-row statement would otherwise load them 2 000 times."""
+    now = time.monotonic()
+    hit = _rules_cache.get(owner_id)
+    if hit and hit[0] > now:
+        return hit[1]
+    rules = list((await db.execute(
+        select(CategoryRule).where(CategoryRule.owner_id == owner_id).order_by(CategoryRule.priority.desc())
+    )).scalars().all())
+    for r in rules:
+        db.expunge(r)  # detached snapshots: the cache outlives this session
+    _rules_cache[owner_id] = (now + _RULES_TTL, rules)
+    return rules
+
+
+def forget_rules(owner_id: uuid.UUID) -> None:
+    _rules_cache.pop(owner_id, None)
+
+
 async def apply_rules(db: AsyncSession, tx: Transaction) -> bool:
     """Set category/scope/flow from rules or hints. Returns True if a category was assigned."""
     if tx.category_source == "user":
         return False
-    rules = (await db.execute(
-        select(CategoryRule).where(CategoryRule.owner_id == tx.owner_id).order_by(CategoryRule.priority.desc())
-    )).scalars().all()
+    rules = await _rules_for(db, tx.owner_id)
     norm = tx.merchant_norm or ""
     desc = (tx.description or "").upper()
     for rule in rules:
@@ -158,7 +180,7 @@ async def apply_rules(db: AsyncSession, tx: Transaction) -> bool:
             if rule.flow_type:
                 tx.flow_type = rule.flow_type
             tx.category_source, tx.category_confidence = "rule", 0.95
-            rule.hits += 1
+            await db.execute(update(CategoryRule).where(CategoryRule.id == rule.id).values(hits=CategoryRule.hits + 1))
             return True
     if tx.direction == "in":
         codes = await category_ids(db, tx.owner_id)
@@ -197,6 +219,7 @@ async def learn_correction(db: AsyncSession, tx: Transaction, *, category_id: uu
                                    CategoryRule.match_type == "exact")
     )).scalar_one_or_none()
     if rule is None:
+        forget_rules(tx.owner_id)
         rule = CategoryRule(owner_id=tx.owner_id, pattern=tx.merchant_norm, match_type="exact", origin="user",
                             priority=10)
         db.add(rule)

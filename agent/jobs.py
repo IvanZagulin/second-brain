@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy import select, update
 
-from agent import archive, extraction, initiative, reports, rules
+from agent import archive, extraction, initiative, memory_care, reports, rules
 from agent.chat import system_prompt
 from agent.context import recent_digest
 from agent.tools import ToolCtx, execute, tool_definitions
@@ -83,6 +83,8 @@ def system_job_specs(settings: dict[str, Any]) -> list[dict[str, Any]]:
     specs.append({"key": "sys:weekly", "kind": "weekly_report", "goal": "Недельный отчёт",
                   "rule": f"weekly:{ini.get('weekly_report_day', 7)}@{ini.get('weekly_report_time', '19:00')}",
                   "priority": 2})
+    specs.append({"key": "sys:profile_diff", "kind": "profile_diff", "goal": "Что изменилось в портрете за месяц",
+                  "rule": "monthly:1@10:00", "priority": 0})
     return specs
 
 
@@ -168,6 +170,7 @@ async def _nightly(owner_id: uuid.UUID, job: dict) -> dict:
                                       data={"subscription_suggestion": s}, dedupe_key=f"subsugg:{s['merchant']}")
         await refresh_tax_calendar(db, owner_id)
         out["subscription_suggestions"] = len(subs)
+    out["memory_care"] = await memory_care.nightly(owner_id)
     for name, fn in (("categorized", reports.categorize_pending), ("profile", reports.refresh_profile_summary)):
         try:
             out[name] = await fn(owner_id)
@@ -192,6 +195,7 @@ HANDLERS = {
     "import_analyze": lambda o, j: archive.analyze_import(o, uuid.UUID(j["payload"]["import_job_id"])),
     "categorize_pending": lambda o, j: reports.categorize_pending(o),
     "profile_summary": lambda o, j: reports.refresh_profile_summary(o),
+    "profile_diff": lambda o, j: memory_care.profile_diff(o),
 }
 
 
